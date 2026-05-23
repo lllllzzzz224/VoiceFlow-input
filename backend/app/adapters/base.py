@@ -15,10 +15,18 @@ class TranscriptionInput:
     hotwords: list[str] | None = None
 
 
+@dataclass
+class AdapterTranscriptionResult:
+    transcription: TranscriptionData
+    decode_ms: int
+    asr_ms: int
+    model: str
+
+
 class AsrAdapter(Protocol):
     engine: AsrEngine
 
-    async def transcribe(self, payload: TranscriptionInput) -> TranscriptionData:
+    async def transcribe(self, payload: TranscriptionInput) -> AdapterTranscriptionResult:
         ...
 
 

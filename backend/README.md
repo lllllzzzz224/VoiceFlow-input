@@ -4,6 +4,8 @@ Minimal backend loop for Web MVP:
 
 `browser audio recording -> WebSocket -> FastAPI -> ASR adapter -> transcription text`
 
+Current recognition mode is **record-then-transcribe** (near-real-time after recording ends), not token/word-by-word streaming ASR.
+
 Current implementation:
 
 - `GET /health`
@@ -31,6 +33,8 @@ cd D:\qiniu\backend
 python tests\ws_mock_smoke.py
 python tests\postprocess_smoke.py
 python tests\history_api_smoke.py
+python tests\markdown_export_smoke.py
+python tests\cors_smoke.py
 ```
 
 This smoke test covers:
@@ -47,6 +51,22 @@ This smoke test covers:
 - adapter failure path (`ASR_ENGINE_ERROR`)
 - postprocess fixed sentence and failure fallback
 - history write/read/clear API path
+- markdown export API path (limit/success-only/empty history)
+- CORS preflight and origin header path (`/history`)
+
+Optional real faster-whisper smoke test:
+
+```powershell
+cd D:\qiniu\backend
+$env:RUN_FASTER_WHISPER_TEST="1"
+python tests\faster_whisper_optin_smoke.py
+```
+
+Reset to mock:
+
+```powershell
+$env:ASR_ENGINE="mock"
+```
 
 Run live checks against a running server:
 
@@ -134,11 +154,23 @@ Server final message shape:
       "model": "mock-v1",
       "cost_cents": 0,
       "bytes_received": 12345,
+      "decode_ms": 0,
+      "asr_ms": 1,
+      "postprocess_ms": 0,
+      "total_ms": 2,
       "time": "2026-05-23T00:00:00+00:00"
     }
   }
 }
 ```
+
+`meta` timing fields:
+
+- `bytes_received`: total audio payload size for the session
+- `decode_ms`: decode stage latency (ffmpeg/media decode)
+- `asr_ms`: model inference stage latency
+- `postprocess_ms`: text postprocessing latency
+- `total_ms`: total latency from `end` handling to final response
 
 ### History API
 
@@ -169,6 +201,31 @@ DELETE /history
 
 History is stored in local JSON and does not include raw audio.
 
+### Markdown Export API
+
+```http
+GET /export/markdown
+```
+
+Query params:
+
+- `limit` (default `50`, min `1`, max `200`)
+- `success_only` (default `false`)
+
+Response:
+
+- Content-Type: `text/markdown; charset=utf-8`
+- Body: markdown text generated from local history
+- Records are sorted by `created_at` descending and truncated by `limit`
+- Per record includes:
+  - `created_at`
+  - `final_text` (fallback `raw_text` when final is empty)
+  - `engine`
+  - `latency_ms`
+  - `success` / `error_code`
+- Empty history still returns valid markdown with a "No Records" section.
+- For very large history, keep `limit` small to avoid oversized exports.
+
 ## Config
 
 Environment variables:
@@ -179,6 +236,27 @@ Environment variables:
 - `POSTPROCESS_SPACING_ENABLED` (`true` by default)
 - `HOTWORD_MAP_JSON` (JSON object string, optional)
 - `HISTORY_FILE_PATH` (`data/history.json` by default)
+- `CORS_ORIGINS` (comma-separated, default includes `http://localhost:8080,http://127.0.0.1:8080`)
+- `MAX_AUDIO_BYTES` (default `8388608`, about 8MB per session)
+
+## CORS For Frontend
+
+When frontend runs on `http://localhost:8080` and backend on `http://localhost:8000`, CORS must be enabled for browser fetch to `/history` and `/export/markdown`.
+
+Current backend CORS config:
+
+- Allowed origins:
+  - `http://localhost:8080`
+  - `http://127.0.0.1:8080`
+  - plus any `CORS_ORIGINS` entries
+- Allowed methods: `GET`, `DELETE`, `OPTIONS`
+- Allowed headers: `Content-Type`
+
+Local dev expansion example:
+
+```powershell
+$env:CORS_ORIGINS="http://localhost:8080,http://127.0.0.1:8080"
+```
 
 ## History And AI Boundary
 
@@ -198,3 +276,24 @@ faster-whisper config:
 - `FASTER_WHISPER_MODEL` (default: `base`)
 - `FASTER_WHISPER_DEVICE` (default: `cpu`)
 - `FASTER_WHISPER_COMPUTE_TYPE` (default: `int8`)
+
+### System Dependencies
+
+When `ASR_ENGINE` is set to `faster_whisper`, the backend relies on the `ffmpeg` executable to robustly decode incoming webm streams into 16kHz raw PCM data (bypassing PyAV container issues). 
+
+- **Requirement**: `ffmpeg` (the executable binary) must be available.
+- **Resolution Path**: The backend first tries `FFMPEG_BINARY`, then system `PATH`, then local `ffmpeg.exe`/`bin/ffmpeg.exe`. Each candidate must pass a `-version` health probe. If all fail, backend falls back to bundled `imageio-ffmpeg` binary.
+
+Enable real faster-whisper recognition:
+
+```powershell
+$env:ASR_ENGINE="faster_whisper"
+$env:FASTER_WHISPER_MODEL="base"
+$env:FASTER_WHISPER_DEVICE="cpu"
+$env:FASTER_WHISPER_COMPUTE_TYPE="int8"
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+If model/runtime/ffmpeg/audio decode fails, API returns `ASR_ENGINE_ERROR`.
+
+If session audio bytes exceed `MAX_AUDIO_BYTES`, API returns `AUDIO_TOO_LARGE`.

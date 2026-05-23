@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from app.contracts import AsrEngine
-from app.adapters.faster_whisper import FasterWhisperAdapter
+from app.adapters.faster_whisper import AsrProcessingError, FasterWhisperAdapter
 from app.main import app
 from app.settings import settings
 
@@ -58,6 +58,12 @@ def run_ws_happy_path(client: TestClient) -> None:
         assert "mock transcription" in result["data"]["raw_text"]
         assert "final_text" in result["data"]
         assert isinstance(result["data"]["final_text"], str)
+        assert "bytes_received" in result["meta"]
+        assert "decode_ms" in result["meta"]
+        assert "asr_ms" in result["meta"]
+        assert "postprocess_ms" in result["meta"]
+        assert "total_ms" in result["meta"]
+        assert "model" in result["meta"]
         assert result["meta"]["cost_cents"] == 0
 
 
@@ -113,7 +119,7 @@ def run_ws_error_adapter_failure(client: TestClient) -> None:
     original_get_model = FasterWhisperAdapter._get_model
 
     def _raise_model_error(self: FasterWhisperAdapter):  # type: ignore[no-untyped-def]
-        raise RuntimeError("forced model init failure")
+        raise AsrProcessingError("model_load_failed", "forced model init failure")
 
     FasterWhisperAdapter._get_model = _raise_model_error  # type: ignore[assignment]
     settings.asr_engine = AsrEngine.FASTER_WHISPER
@@ -127,9 +133,26 @@ def run_ws_error_adapter_failure(client: TestClient) -> None:
             assert final_msg["type"] == "transcription_result"
             assert final_msg["result"]["success"] is False
             assert final_msg["result"]["error"]["code"] == "ASR_ENGINE_ERROR"
+            assert final_msg["result"]["error"]["details"]["reason"] == "model_load_failed"
     finally:
         FasterWhisperAdapter._get_model = original_get_model  # type: ignore[assignment]
         settings.asr_engine = previous_engine
+
+
+def run_ws_error_audio_too_large(client: TestClient) -> None:
+    previous_limit = settings.max_audio_bytes
+    settings.max_audio_bytes = 8
+    try:
+        with client.websocket_connect("/ws/transcribe") as websocket:
+            websocket.send_json({"type": "start", "sample_rate": 16000, "channels": 1})
+            _ = websocket.receive_json()
+            websocket.send_bytes(b"0123456789")
+            final_msg = websocket.receive_json()
+            assert final_msg["type"] == "transcription_result"
+            assert final_msg["result"]["success"] is False
+            assert final_msg["result"]["error"]["code"] == "AUDIO_TOO_LARGE"
+    finally:
+        settings.max_audio_bytes = previous_limit
 
 
 def main() -> None:
@@ -141,6 +164,7 @@ def main() -> None:
         run_ws_error_invalid_json(client)
         run_ws_error_unsupported_type(client)
         run_ws_error_adapter_failure(client)
+        run_ws_error_audio_too_large(client)
     print("ws_mock_smoke: PASS")
 
 

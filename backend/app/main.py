@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
+import time
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Query, Response, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.adapters.base import TranscriptionInput
+from app.adapters.faster_whisper import AsrProcessingError
 from app.asr_service import get_asr_adapter
 from app.contracts import ErrorCode, ErrorInfo, StandardResult
 from app.history import history_store
@@ -16,6 +20,14 @@ from app.postprocess import run_postprocess
 from app.settings import settings
 
 app = FastAPI(title="VoiceFlow Input Backend", version="0.1.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type"],
+)
+logger = logging.getLogger("voiceflow.backend")
 
 
 def now_iso() -> str:
@@ -57,6 +69,79 @@ def append_history_item(
     )
 
 
+def asr_error_details(exc: Exception) -> dict[str, Any]:
+    if isinstance(exc, AsrProcessingError):
+        return {
+            "engine": settings.asr_engine.value,
+            "reason": exc.reason,
+            "reason_detail": exc.message,
+        }
+    return {
+        "engine": settings.asr_engine.value,
+        "reason": "unknown_error",
+        "reason_detail": str(exc),
+    }
+
+
+def _parse_created_at(value: Any) -> datetime:
+    if not isinstance(value, str) or not value:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    try:
+        normalized = value.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    except Exception:
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def build_history_markdown(items: list[dict[str, Any]], total_count: int, success_only: bool) -> str:
+    lines: list[str] = []
+    lines.append("# VoiceFlow Input Transcript Export")
+    lines.append("")
+    lines.append(f"- Exported At: {now_iso()}")
+    lines.append(f"- Exported Count: {len(items)}")
+    lines.append(f"- Total History Count: {total_count}")
+    lines.append(f"- Success Only: {str(success_only).lower()}")
+    lines.append("")
+    lines.append("> Large history export should use smaller `limit` values to avoid oversized payloads.")
+    lines.append("")
+
+    if not items:
+        lines.append("## No Records")
+        lines.append("")
+        lines.append("No transcription history is available yet.")
+        lines.append("")
+        return "\n".join(lines)
+
+    lines.append("## Records")
+    lines.append("")
+    for idx, item in enumerate(items, start=1):
+        created_at = str(item.get("created_at", ""))
+        final_text = str(item.get("final_text", "")).strip()
+        raw_text = str(item.get("raw_text", "")).strip()
+        text_out = final_text if final_text else raw_text
+        engine = str(item.get("engine", ""))
+        latency_ms = item.get("latency_ms", "")
+        success = item.get("success")
+        error_code = item.get("error_code")
+
+        lines.append(f"### {idx}. {created_at}")
+        lines.append("")
+        lines.append(f"- engine: {engine}")
+        lines.append(f"- latency_ms: {latency_ms}")
+        if success:
+            lines.append("- success: true")
+        else:
+            lines.append(f"- error_code: {error_code}")
+        lines.append("")
+        lines.append(text_out if text_out else "(empty)")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 @app.get("/health")
 async def health() -> dict[str, Any]:
     result = ok_result(
@@ -80,6 +165,20 @@ async def clear_history() -> dict[str, Any]:
     return result.model_dump()
 
 
+@app.get("/export/markdown")
+async def export_markdown(
+    limit: int = Query(default=50, ge=1, le=200),
+    success_only: bool = Query(default=False),
+) -> Response:
+    all_items = history_store.list_items()
+    sorted_items = sorted(all_items, key=lambda item: _parse_created_at(item.get("created_at")), reverse=True)
+    if success_only:
+        sorted_items = [item for item in sorted_items if item.get("success") is True]
+    limited_items = sorted_items[:limit]
+    markdown = build_history_markdown(limited_items, total_count=len(all_items), success_only=success_only)
+    return Response(content=markdown, media_type="text/markdown; charset=utf-8")
+
+
 @app.websocket("/ws/transcribe")
 async def ws_transcribe(websocket: WebSocket) -> None:
     await websocket.accept()
@@ -89,6 +188,30 @@ async def ws_transcribe(websocket: WebSocket) -> None:
     language: str | None = None
     hotwords: list[str] = []
     audio_buffer = bytearray()
+
+    async def fail_audio_too_large() -> None:
+        append_history_item(
+            raw_text="",
+            final_text="",
+            engine=settings.asr_engine.value,
+            latency_ms=0,
+            success=False,
+            error_code=ErrorCode.AUDIO_TOO_LARGE.value,
+        )
+        await websocket.send_json(
+            {
+                "type": "transcription_result",
+                "result": error_result(
+                    ErrorCode.AUDIO_TOO_LARGE,
+                    "Audio payload exceeds configured size limit.",
+                    details={
+                        "max_audio_bytes": settings.max_audio_bytes,
+                        "bytes_received": len(audio_buffer),
+                    },
+                ).model_dump(),
+            }
+        )
+        await websocket.close()
 
     try:
         while True:
@@ -101,6 +224,9 @@ async def ws_transcribe(websocket: WebSocket) -> None:
 
             if message.get("bytes") is not None:
                 audio_buffer.extend(message["bytes"])
+                if len(audio_buffer) > settings.max_audio_bytes:
+                    await fail_audio_too_large()
+                    return
                 continue
 
             text_payload = message.get("text")
@@ -158,6 +284,9 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                     )
                     continue
                 audio_buffer.extend(chunk)
+                if len(audio_buffer) > settings.max_audio_bytes:
+                    await fail_audio_too_large()
+                    return
                 continue
 
             if msg_type == "ping":
@@ -170,6 +299,7 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                 continue
 
             if msg_type == "end":
+                total_started = time.perf_counter()
                 if len(audio_buffer) == 0:
                     append_history_item(
                         raw_text="",
@@ -193,7 +323,7 @@ async def ws_transcribe(websocket: WebSocket) -> None:
 
                 adapter = get_asr_adapter()
                 try:
-                    transcription = await adapter.transcribe(
+                    adapter_output = await adapter.transcribe(
                         TranscriptionInput(
                             audio_bytes=bytes(audio_buffer),
                             sample_rate=sample_rate,
@@ -202,6 +332,7 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                             hotwords=hotwords,
                         )
                     )
+                    transcription = adapter_output.transcription
                 except NotImplementedError as exc:
                     append_history_item(
                         raw_text="",
@@ -224,6 +355,13 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                     await websocket.close()
                     return
                 except Exception as exc:
+                    details = asr_error_details(exc)
+                    logger.error(
+                        "ASR processing failed: engine=%s reason=%s detail=%s",
+                        details.get("engine"),
+                        details.get("reason"),
+                        details.get("reason_detail"),
+                    )
                     append_history_item(
                         raw_text="",
                         final_text="",
@@ -238,7 +376,7 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                             "result": error_result(
                                 ErrorCode.ASR_ENGINE_ERROR,
                                 "ASR processing failed.",
-                                details={"engine": settings.asr_engine.value, "reason": str(exc)},
+                                details=details,
                             ).model_dump(),
                         }
                     )
@@ -248,24 +386,25 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                 result = ok_result(
                     data=transcription.model_dump(),
                     meta={
-                        "model": (
-                            "mock-v1"
-                            if transcription.engine.value == "mock"
-                            else settings.faster_whisper_model
-                            if transcription.engine.value == "faster_whisper"
-                            else "pending"
-                        ),
+                        "model": adapter_output.model,
                         "cost_cents": 0,
                         "bytes_received": len(audio_buffer),
-                        "time": now_iso(),
+                        "decode_ms": adapter_output.decode_ms,
+                        "asr_ms": adapter_output.asr_ms,
                     },
                 )
+                postprocess_started = time.perf_counter()
                 final_text, corrections, warning = run_postprocess(
                     raw_text=transcription.raw_text,
                     hotword_map=settings.hotword_map,
                     punctuation_enabled=settings.postprocess_punctuation_enabled,
                     spacing_enabled=settings.postprocess_spacing_enabled,
                 )
+                postprocess_ms = max(int((time.perf_counter() - postprocess_started) * 1000), 0)
+                total_ms = max(int((time.perf_counter() - total_started) * 1000), 1)
+                result.meta["postprocess_ms"] = postprocess_ms
+                result.meta["total_ms"] = total_ms
+                result.meta["time"] = now_iso()
                 if result.data is not None:
                     result.data["final_text"] = final_text
                     result.data["applied_corrections"] = [item.model_dump() for item in corrections]
