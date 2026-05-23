@@ -97,7 +97,7 @@ const handleCopyBtnClick = async () => {
 };
 
 const handleGenerateSummary = async () => {
-  const textToSummarize = finalText.value || rawText.value || transcriptText.value;
+  const textToSummarize = transcriptText.value;
   if (!textToSummarize) return;
   await generateSummary(textToSummarize);
 };
@@ -152,11 +152,6 @@ onMounted(() => {
           :value="transcriptText"
         ></textarea>
 
-        <details v-if="rawText && rawText !== finalText" class="raw-text-details">
-          <summary>查看原始识别结果</summary>
-          <div class="raw-text-content">{{ rawText }}</div>
-        </details>
-
         <div class="transcript-footer">
           <div class="meta-badges">
             <span class="meta-text" v-if="latencyInfo">
@@ -165,9 +160,6 @@ onMounted(() => {
             </span>
             <span class="meta-badge info" v-if="appliedCorrectionsCount > 0">
               已应用修正: {{ appliedCorrectionsCount }}
-            </span>
-            <span class="meta-badge warning" v-if="warningText">
-              已保留原始识别结果
             </span>
           </div>
           <div class="actions">
