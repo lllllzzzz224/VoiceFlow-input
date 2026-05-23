@@ -89,7 +89,10 @@ export function useWebSocket() {
         socket.send(JSON.stringify({
           type: "start",
           session_id: "vue-demo",
-          format: "webm"
+          format: "webm",
+          sample_rate: 16000,
+          channels: 1,
+          language: "zh"
         }));
 
         setState('recording');

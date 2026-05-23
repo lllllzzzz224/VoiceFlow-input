@@ -173,11 +173,15 @@ class FasterWhisperAdapter:
                 )
 
             asr_start = time.perf_counter()
-            segments_iter, _ = model.transcribe(
-                audio_array,
-                language=payload.language,
-                initial_prompt="这是一段包含普通话和英文混合的会议记录，请使用简体中文输出。Hello and welcome."
-            )
+            transcribe_kwargs: dict[str, Any] = {
+                "language": payload.language or settings.default_language,
+                "beam_size": settings.faster_whisper_beam_size,
+                "vad_filter": settings.faster_whisper_vad_filter,
+                "condition_on_previous_text": False,
+            }
+            if settings.asr_initial_prompt:
+                transcribe_kwargs["initial_prompt"] = settings.asr_initial_prompt
+            segments_iter, _ = model.transcribe(audio_array, **transcribe_kwargs)
             asr_ms = max(int((time.perf_counter() - asr_start) * 1000), 1)
 
             segments: list[Segment] = []
