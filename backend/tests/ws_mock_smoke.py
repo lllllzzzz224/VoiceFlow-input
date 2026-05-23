@@ -63,6 +63,8 @@ def run_ws_happy_path(client: TestClient) -> None:
         assert "asr_ms" in result["meta"]
         assert "postprocess_ms" in result["meta"]
         assert "total_ms" in result["meta"]
+        assert "audio_duration_ms" in result["meta"]
+        assert "model_cached" in result["meta"]
         assert "model" in result["meta"]
         assert result["meta"]["cost_cents"] == 0
 
@@ -155,6 +157,45 @@ def run_ws_error_audio_too_large(client: TestClient) -> None:
         settings.max_audio_bytes = previous_limit
 
 
+def run_ws_error_audio_too_long(client: TestClient) -> None:
+    previous_engine = settings.asr_engine
+    original_get_model = FasterWhisperAdapter._get_model
+    original_decode = FasterWhisperAdapter._transcribe_sync
+
+    class _FakeModel:
+        def transcribe(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+            return iter([]), None
+
+    def _fake_get_model(self: FasterWhisperAdapter):  # type: ignore[no-untyped-def]
+        return _FakeModel(), True
+
+    def _raise_too_long(self: FasterWhisperAdapter, _payload):  # type: ignore[no-untyped-def]
+        raise AsrProcessingError(
+            "audio_too_long",
+            "Audio duration exceeds configured limit.",
+            {"audio_duration_ms": 35000, "max_recording_seconds": 30},
+        )
+
+    FasterWhisperAdapter._get_model = _fake_get_model  # type: ignore[assignment]
+    FasterWhisperAdapter._transcribe_sync = _raise_too_long  # type: ignore[assignment]
+    settings.asr_engine = AsrEngine.FASTER_WHISPER
+    try:
+        with client.websocket_connect("/ws/transcribe") as websocket:
+            websocket.send_json({"type": "start", "sample_rate": 16000, "channels": 1})
+            _ = websocket.receive_json()
+            websocket.send_bytes(b"voice")
+            websocket.send_json({"type": "end"})
+            final_msg = websocket.receive_json()
+            assert final_msg["type"] == "transcription_result"
+            assert final_msg["result"]["success"] is False
+            assert final_msg["result"]["error"]["code"] == "CONFIG_ERROR"
+            assert final_msg["result"]["error"]["details"]["reason"] == "audio_too_long"
+    finally:
+        FasterWhisperAdapter._get_model = original_get_model  # type: ignore[assignment]
+        FasterWhisperAdapter._transcribe_sync = original_decode  # type: ignore[assignment]
+        settings.asr_engine = previous_engine
+
+
 def main() -> None:
     with TestClient(app) as client:
         run_health_check(client)
@@ -165,6 +206,7 @@ def main() -> None:
         run_ws_error_unsupported_type(client)
         run_ws_error_adapter_failure(client)
         run_ws_error_audio_too_large(client)
+        run_ws_error_audio_too_long(client)
     print("ws_mock_smoke: PASS")
 
 

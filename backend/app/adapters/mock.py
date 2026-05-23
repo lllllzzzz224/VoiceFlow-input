@@ -30,6 +30,8 @@ class MockAsrAdapter:
             transcription=transcription,
             decode_ms=0,
             asr_ms=max(latency_ms, 1),
+            audio_duration_ms=0,
+            model_cached=True,
             model="mock-v1",
         )
 

@@ -20,6 +20,7 @@ class Settings:
         self.postprocess_spacing_enabled = os.getenv("POSTPROCESS_SPACING_ENABLED", "true").strip().lower() != "false"
         self.history_file_path = os.getenv("HISTORY_FILE_PATH", "data/history.json").strip() or "data/history.json"
         self.max_audio_bytes = self._parse_max_audio_bytes(os.getenv("MAX_AUDIO_BYTES", "8388608").strip())
+        self.max_recording_seconds = self._parse_max_recording_seconds(os.getenv("MAX_RECORDING_SECONDS", "30").strip())
         self.cors_origins = self._load_cors_origins()
         self.hotword_map = self._load_hotword_map()
 
@@ -29,6 +30,13 @@ class Settings:
             return value if value > 0 else 8388608
         except Exception:
             return 8388608
+
+    def _parse_max_recording_seconds(self, raw: str) -> float:
+        try:
+            value = float(raw)
+            return value if value > 0 else 30.0
+        except Exception:
+            return 30.0
 
     def _load_cors_origins(self) -> list[str]:
         default_origins = [
