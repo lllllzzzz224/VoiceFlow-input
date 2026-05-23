@@ -290,6 +290,10 @@ faster-whisper config:
 - `FASTER_WHISPER_MODEL` (default: `base`)
 - `FASTER_WHISPER_DEVICE` (default: `cpu`)
 - `FASTER_WHISPER_COMPUTE_TYPE` (default: `int8`)
+- `FASTER_WHISPER_BEAM_SIZE` (default: `5`)
+- `FASTER_WHISPER_VAD_FILTER` (default: `true`)
+- `DEFAULT_LANGUAGE` (default: `zh`)
+- `ASR_INITIAL_PROMPT` (default: empty; only passed when explicitly configured)
 
 ### System Dependencies
 

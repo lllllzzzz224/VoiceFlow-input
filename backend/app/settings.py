@@ -15,6 +15,10 @@ class Settings:
         self.faster_whisper_model = os.getenv("FASTER_WHISPER_MODEL", "base").strip() or "base"
         self.faster_whisper_device = os.getenv("FASTER_WHISPER_DEVICE", "cpu").strip() or "cpu"
         self.faster_whisper_compute_type = os.getenv("FASTER_WHISPER_COMPUTE_TYPE", "int8").strip() or "int8"
+        self.faster_whisper_beam_size = self._parse_positive_int(os.getenv("FASTER_WHISPER_BEAM_SIZE", "5").strip(), 5)
+        self.faster_whisper_vad_filter = self._parse_bool(os.getenv("FASTER_WHISPER_VAD_FILTER", "true").strip(), True)
+        self.default_language = os.getenv("DEFAULT_LANGUAGE", "zh").strip() or "zh"
+        self.asr_initial_prompt = os.getenv("ASR_INITIAL_PROMPT", "").strip()
 
         self.postprocess_punctuation_enabled = os.getenv("POSTPROCESS_PUNCTUATION_ENABLED", "true").strip().lower() != "false"
         self.postprocess_spacing_enabled = os.getenv("POSTPROCESS_SPACING_ENABLED", "true").strip().lower() != "false"
@@ -37,6 +41,21 @@ class Settings:
             return value if value > 0 else 30.0
         except Exception:
             return 30.0
+
+    def _parse_positive_int(self, raw: str, fallback: int) -> int:
+        try:
+            value = int(raw)
+            return value if value > 0 else fallback
+        except Exception:
+            return fallback
+
+    def _parse_bool(self, raw: str, fallback: bool) -> bool:
+        normalized = raw.strip().lower()
+        if normalized in ("1", "true", "yes", "on"):
+            return True
+        if normalized in ("0", "false", "no", "off"):
+            return False
+        return fallback
 
     def _load_cors_origins(self) -> list[str]:
         default_origins = [
