@@ -1,0 +1,204 @@
+import { ref, onUnmounted } from 'vue';
+
+export function useWebSocket() {
+  const state = ref('idle'); // idle | recording | sending | transcribing | done | error
+  const statusText = ref('准备就绪');
+  const errorText = ref('');
+  
+  const transcriptText = ref('');
+  const latencyInfo = ref('');
+  const isConnected = ref(false);
+  const isConnError = ref(false);
+  const recordingTime = ref(0);
+
+  let mediaRecorder = null;
+  let socket = null;
+  let audioStream = null;
+  let timerInterval = null;
+
+  const setState = (newState, errorMessage = '') => {
+    state.value = newState;
+    if (newState === 'error') {
+      errorText.value = errorMessage || '发生未知错误';
+    }
+    
+    switch (newState) {
+      case 'idle':
+        statusText.value = '准备就绪';
+        break;
+      case 'recording':
+        statusText.value = '录音中...';
+        break;
+      case 'sending':
+        statusText.value = '发送中...';
+        break;
+      case 'transcribing':
+        statusText.value = '识别中...';
+        break;
+      case 'done':
+        statusText.value = '识别完成';
+        break;
+      case 'error':
+        statusText.value = '发生错误';
+        break;
+    }
+  };
+
+  const updateConnectionState = (connected, error = false) => {
+    isConnected.value = connected;
+    isConnError.value = error;
+  };
+
+  const cleanup = () => {
+    if (timerInterval) {
+      clearInterval(timerInterval);
+      timerInterval = null;
+    }
+    if (audioStream) {
+      audioStream.getTracks().forEach(track => track.stop());
+      audioStream = null;
+    }
+    mediaRecorder = null;
+    socket = null;
+  };
+
+  const startRecording = async (onDoneCallback) => {
+    transcriptText.value = '';
+    latencyInfo.value = '';
+    recordingTime.value = 0;
+    setState('idle');
+
+    try {
+      audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      socket = new WebSocket('ws://localhost:8000/ws/transcribe');
+
+      socket.onopen = () => {
+        updateConnectionState(true, false);
+        socket.send(JSON.stringify({
+          type: "start",
+          session_id: "vue-demo",
+          format: "webm"
+        }));
+
+        setState('recording');
+        
+        timerInterval = setInterval(() => {
+          recordingTime.value++;
+        }, 1000);
+        
+        mediaRecorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm' });
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0 && socket.readyState === WebSocket.OPEN) {
+            socket.send(event.data);
+          }
+        };
+
+        mediaRecorder.onstop = () => {
+          if (timerInterval) {
+            clearInterval(timerInterval);
+            timerInterval = null;
+          }
+          setState('sending');
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: "end" }));
+            setState('transcribing');
+          }
+        };
+
+        mediaRecorder.start(250);
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const res = JSON.parse(event.data);
+          if (res.type === 'ack') {
+            console.log('Received ack');
+          } else if (res.type === 'transcription_result') {
+            if (res.result && res.result.success && res.result.data) {
+              transcriptText.value = res.result.data.final_text || res.result.data.raw_text || '';
+              
+              const meta = res.result.meta || {};
+              const data = res.result.data || {};
+              
+              let times = [];
+              if (meta.decode_ms) times.push(`解码:${meta.decode_ms}ms`);
+              if (meta.asr_ms) times.push(`ASR:${meta.asr_ms}ms`);
+              if (meta.postprocess_ms) times.push(`处理:${meta.postprocess_ms}ms`);
+              if (meta.total_ms || data.latency_ms) times.push(`总计:${meta.total_ms || data.latency_ms}ms`);
+
+              if (times.length > 0) {
+                latencyInfo.value = `引擎: ${data.engine || '未知'} | 耗时: ${times.join(' ')}`;
+              } else if (data.latency_ms) {
+                latencyInfo.value = `引擎: ${data.engine || '未知'} | 延迟: ${data.latency_ms}ms`;
+              }
+              
+              setState('done');
+              socket.close();
+              if (onDoneCallback) onDoneCallback();
+            } else if (res.result && res.result.error) {
+              setState('error', res.result.error.message || '识别失败');
+              socket.close();
+            }
+          } else if (res.type === 'error') {
+            if (res.result && res.result.error) {
+              setState('error', res.result.error.message || '发生错误');
+            } else {
+              setState('error', '发生未知错误');
+            }
+            socket.close();
+          }
+        } catch (e) {
+          console.error('Failed to parse message', e);
+        }
+      };
+
+      socket.onerror = (err) => {
+        console.error('WebSocket error:', err);
+        updateConnectionState(false, true);
+        setState('error', 'WebSocket 连接失败，请确保后端服务运行');
+        cleanup();
+      };
+
+      socket.onclose = () => {
+        updateConnectionState(false);
+        if (state.value === 'recording' || state.value === 'transcribing' || state.value === 'sending') {
+          setState('error', '连接意外断开');
+        }
+        cleanup();
+      };
+
+    } catch (err) {
+      console.error('Microphone access error:', err);
+      if (err.name === 'NotAllowedError') {
+        setState('error', '未获得麦克风权限');
+      } else if (err.name === 'NotFoundError') {
+        setState('error', '未检测到麦克风设备');
+      } else {
+        setState('error', `麦克风错误: ${err.message}`);
+      }
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      mediaRecorder.stop();
+    }
+  };
+
+  onUnmounted(() => {
+    cleanup();
+  });
+
+  return {
+    state,
+    statusText,
+    errorText,
+    transcriptText,
+    latencyInfo,
+    isConnected,
+    isConnError,
+    recordingTime,
+    startRecording,
+    stopRecording
+  };
+}

@@ -147,7 +147,7 @@ Validation:
 ### P1-003: Frontend Browser Recorder Closed Loop
 
 Owner: frontend
-Status: in_progress
+Status: completed
 
 Scope:
 
@@ -174,6 +174,35 @@ Validation:
 
 - 手动浏览器测试。
 - 与 backend mock 服务联调。
+
+### P1-003a: Frontend UI Experience Optimizations (Vue 3)
+
+Owner: frontend
+Status: completed
+
+Scope:
+
+- 将原有 vanilla HTML/JS 迁移至现代化的 Vue 3 + Vite 架构 (`frontend-vue`)。
+- 在“录音中”状态下增加精确秒表计时器 (`0:01`)。
+- 在“处理中”状态的主操作按钮中，增加纯 CSS 实现的垂直波浪纹（`|||||`）解码动效。
+- 若后端提供 `decode_ms`, `asr_ms`, `postprocess_ms`, `total_ms`，解析并显示详细耗时拼接串。
+- 在历史记录面板上方加入“隐藏失败记录”控制开关。
+
+Do Not Touch:
+
+- 不引入过于沉重的第三方 UI 组件库。
+- 不对核心识别逻辑做侵入式修改。
+
+Acceptance:
+
+- 新 UI 在 Vite server (`http://localhost:5173`) 下正常运行。
+- CSS 动画正常展示。
+- 历史记录过滤生效。
+
+Validation:
+
+- 前端手动测试验证 CSS 动画。
+- 点击测试复选框及耗时文本展示。
 
 ### P1-004: Align WebSocket Contract Between Frontend And Backend
 
