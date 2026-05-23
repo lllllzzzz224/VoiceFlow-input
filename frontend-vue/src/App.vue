@@ -8,6 +8,10 @@ const {
   statusText,
   errorText,
   transcriptText,
+  finalText,
+  rawText,
+  appliedCorrectionsCount,
+  warningText,
   latencyInfo,
   isConnected,
   isConnError,
@@ -92,6 +96,7 @@ onMounted(() => {
     <header>
       <h1>VoiceFlow Input</h1>
       <div class="header-meta">
+        <span class="status-badge cost-zero">本地识别，成本 0</span>
         <span 
           class="conn-dot" 
           :class="{ 'connected': isConnected, 'disconnected': !isConnected && !isConnError, 'error': isConnError }"
@@ -122,13 +127,24 @@ onMounted(() => {
           :value="transcriptText"
         ></textarea>
 
+        <details v-if="rawText && rawText !== finalText" class="raw-text-details">
+          <summary>查看原始识别结果</summary>
+          <div class="raw-text-content">{{ rawText }}</div>
+        </details>
+
         <div class="transcript-footer">
-          <span class="meta-text">
-            <template v-if="latencyInfo">
+          <div class="meta-badges">
+            <span class="meta-text" v-if="latencyInfo">
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
               {{ latencyInfo }}
-            </template>
-          </span>
+            </span>
+            <span class="meta-badge info" v-if="appliedCorrectionsCount > 0">
+              已应用修正: {{ appliedCorrectionsCount }}
+            </span>
+            <span class="meta-badge warning" v-if="warningText">
+              已保留原始识别结果
+            </span>
+          </div>
           <div class="actions">
             <button class="secondary-btn" :disabled="!transcriptText" @click="handleCopyBtnClick" aria-label="复制文本">
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
@@ -205,8 +221,12 @@ onMounted(() => {
               v-show="!(!item.success && hideErrorHistory)"
             >
             <div class="history-item-header">
-              <span>{{ new Date(item.created_at).toLocaleString('zh-CN') }}</span>
-              <span>引擎: {{ item.engine || '未知' }} | 延迟: {{ item.latency_ms || 0 }}ms</span>
+              <span class="hist-time">{{ new Date(item.created_at).toLocaleString('zh-CN') }}</span>
+              <span class="hist-stats">
+                引擎: {{ item.engine || '未知' }} | 
+                <template v-if="item.audio_duration_ms">音频: {{ item.audio_duration_ms }}ms | </template>
+                <template v-if="item.latency_ms || item.total_ms">耗时: {{ item.total_ms || item.latency_ms }}ms</template>
+              </span>
             </div>
             <div class="history-item-body">
               {{ !item.success ? `[失败] ${item.error_code || '未知错误'}` : (item.final_text || item.raw_text || '') }}

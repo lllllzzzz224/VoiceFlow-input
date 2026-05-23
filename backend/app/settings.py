@@ -63,6 +63,12 @@ class Settings:
             "qi niu yun": "\u4e03\u725b\u4e91",
             "kodo": "Kodo",
             "mcp": "MCP",
+            "\u4e03\u725b\u4e91": "\u4e03\u725b\u4e91",
+            "github": "GitHub",
+            "fastapi": "FastAPI",
+            "faster whisper": "faster-whisper",
+            "faster-whisper": "faster-whisper",
+            "websocket": "WebSocket",
         }
         raw = os.getenv("HOTWORD_MAP_JSON", "").strip()
         if not raw:

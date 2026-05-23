@@ -6,6 +6,10 @@ export function useWebSocket() {
   const errorText = ref('');
   
   const transcriptText = ref('');
+  const finalText = ref('');
+  const rawText = ref('');
+  const appliedCorrectionsCount = ref(0);
+  const warningText = ref('');
   const latencyInfo = ref('');
   const isConnected = ref(false);
   const isConnError = ref(false);
@@ -68,6 +72,10 @@ export function useWebSocket() {
 
   const startRecording = async (onDoneCallback) => {
     transcriptText.value = '';
+    finalText.value = '';
+    rawText.value = '';
+    appliedCorrectionsCount.value = 0;
+    warningText.value = '';
     latencyInfo.value = '';
     recordingTime.value = 0;
     setState('idle');
@@ -120,6 +128,15 @@ export function useWebSocket() {
           } else if (res.type === 'transcription_result') {
             if (res.result && res.result.success && res.result.data) {
               transcriptText.value = res.result.data.final_text || res.result.data.raw_text || '';
+              finalText.value = res.result.data.final_text || '';
+              rawText.value = res.result.data.raw_text || '';
+              
+              if (res.result.data.applied_corrections) {
+                appliedCorrectionsCount.value = res.result.data.applied_corrections.length;
+              } else {
+                appliedCorrectionsCount.value = 0;
+              }
+              warningText.value = res.result.data.warning || '';
               
               const meta = res.result.meta || {};
               const data = res.result.data || {};
@@ -203,6 +220,10 @@ export function useWebSocket() {
     statusText,
     errorText,
     transcriptText,
+    finalText,
+    rawText,
+    appliedCorrectionsCount,
+    warningText,
     latencyInfo,
     isConnected,
     isConnError,

@@ -486,3 +486,72 @@ button:disabled {
   0%, 100% { transform: scaleY(0.4); }
   50% { transform: scaleY(1.0); }
 }
+
+/* ============================================
+   Post-process and Meta Badges
+   ============================================ */
+.status-badge.cost-zero {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--green);
+  border-color: rgba(16, 185, 129, 0.3);
+  font-weight: 600;
+}
+
+.raw-text-details {
+  padding: 0 20px 10px;
+  margin-top: -10px;
+}
+.raw-text-details summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  user-select: none;
+  margin-bottom: 8px;
+  outline: none;
+}
+.raw-text-details summary:hover {
+  color: var(--text-primary);
+}
+.raw-text-content {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  background: rgba(255,255,255,0.02);
+  padding: 10px;
+  border-radius: 6px;
+  border: 1px dashed var(--border);
+  line-height: 1.5;
+}
+
+.meta-badges {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.meta-badge {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(255,255,255,0.05);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+.meta-badge.info {
+  background: rgba(59, 130, 246, 0.1);
+  color: #93c5fd;
+  border-color: rgba(59, 130, 246, 0.3);
+}
+
+.meta-badge.warning {
+  background: rgba(245, 158, 11, 0.1);
+  color: #fcd34d;
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+/* History List Updates */
+.history-item.error {
+  opacity: 0.6;
+  filter: grayscale(80%);
+}

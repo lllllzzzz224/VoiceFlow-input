@@ -13,7 +13,21 @@ from app.main import app
 
 
 def assert_history_item_shape(item: dict) -> None:
-    for key in ["id", "created_at", "raw_text", "final_text", "engine", "latency_ms", "success", "error_code"]:
+    for key in [
+        "id",
+        "created_at",
+        "raw_text",
+        "final_text",
+        "engine",
+        "latency_ms",
+        "success",
+        "error_code",
+        "audio_duration_ms",
+        "decode_ms",
+        "asr_ms",
+        "postprocess_ms",
+        "total_ms",
+    ]:
         assert key in item
 
 
@@ -49,9 +63,28 @@ def main() -> None:
                 assert payload["success"] is True
                 items = payload["data"]["items"]
                 assert payload["data"]["count"] == 2
+                assert payload["data"]["total_count"] == 2
+                assert payload["data"]["success_only"] is False
+                assert payload["data"]["limit"] == 50
                 assert len(items) == 2
                 for item in items:
                     assert_history_item_shape(item)
+
+                history_limit_resp = client.get("/history?limit=1")
+                assert history_limit_resp.status_code == 200
+                limit_payload = history_limit_resp.json()
+                assert limit_payload["data"]["count"] == 1
+                assert len(limit_payload["data"]["items"]) == 1
+                assert limit_payload["data"]["total_count"] == 2
+                assert limit_payload["data"]["limit"] == 1
+
+                history_success_resp = client.get("/history?success_only=true")
+                assert history_success_resp.status_code == 200
+                success_payload = history_success_resp.json()
+                assert success_payload["data"]["success_only"] is True
+                assert success_payload["data"]["count"] == 1
+                assert len(success_payload["data"]["items"]) == 1
+                assert success_payload["data"]["items"][0]["success"] is True
 
                 delete_resp = client.delete("/history")
                 assert delete_resp.status_code == 200
@@ -60,6 +93,7 @@ def main() -> None:
                 history_resp_after = client.get("/history")
                 assert history_resp_after.status_code == 200
                 assert history_resp_after.json()["data"]["count"] == 0
+                assert history_resp_after.json()["data"]["total_count"] == 0
                 assert history_resp_after.json()["data"]["items"] == []
         finally:
             history_store.set_path(original_path)

@@ -17,7 +17,7 @@ export function useHistory() {
       } else if (Array.isArray(data)) {
         items = data;
       }
-      historyItems.value = items;
+      historyItems.value = items.slice(0, 50);
     } catch (err) {
       console.error('fetchHistory error:', err);
       historyError.value = '获取历史记录失败';
@@ -39,7 +39,7 @@ export function useHistory() {
   const exportMarkdown = async () => {
     historyError.value = '';
     try {
-      const url = 'http://localhost:8000/export/markdown?limit=50&success_only=false';
+      const url = 'http://localhost:8000/export/markdown?limit=50&success_only=true';
       const res = await fetch(url);
       if (!res.ok) throw new Error('Export failed');
       
