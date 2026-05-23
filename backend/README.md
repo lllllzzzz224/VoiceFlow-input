@@ -239,6 +239,66 @@ Response:
 - Empty history still returns valid markdown with a "No Records" section.
 - For very large history, keep `limit` small to avoid oversized exports.
 
+### AI Meeting Summary API (Optional)
+
+```http
+POST /ai/meeting-summary
+```
+
+Request JSON:
+
+```json
+{
+  "transcript": "string",
+  "mode": "minutes",
+  "include_original": true
+}
+```
+
+Success response (`StandardResult`):
+
+```json
+{
+  "success": true,
+  "data": {
+    "summary_markdown": "string",
+    "provider": "xiaomi_mimo",
+    "model": "MiMo-V2.5",
+    "mode": "minutes"
+  },
+  "error": null,
+  "meta": {
+    "latency_ms": 1200,
+    "ai_enabled": true,
+    "ai_used": true
+  }
+}
+```
+
+Failure response (`StandardResult`):
+
+```json
+{
+  "success": false,
+  "data": null,
+  "error": {
+    "code": "CONFIG_ERROR",
+    "message": "AI meeting summary is not configured.",
+    "details": {}
+  },
+  "meta": {
+    "ai_enabled": false,
+    "ai_used": false
+  }
+}
+```
+
+Notes:
+
+- MiMo only processes transcript text; audio is still handled by ASR path.
+- Frontend must call backend API, not MiMo directly.
+- API key is loaded only from backend local environment variables.
+
 ## Config
 
 Environment variables:
@@ -247,11 +307,16 @@ Environment variables:
 - `MOCK_RESPONSE_TEXT` (`mock transcription` by default)
 - `POSTPROCESS_PUNCTUATION_ENABLED` (`true` by default)
 - `POSTPROCESS_SPACING_ENABLED` (`true` by default)
+- `POSTPROCESS_SIMPLIFIED_CHINESE_ENABLED` (`true` by default)
 - `HOTWORD_MAP_JSON` (JSON object string, optional; defaults include `七牛云`, `Kodo`, `MCP`, `GitHub`, `FastAPI`, `faster-whisper`, `WebSocket`)
 - `HISTORY_FILE_PATH` (`data/history.json` by default)
 - `CORS_ORIGINS` (comma-separated, default includes `http://localhost:8080,http://127.0.0.1:8080`)
 - `MAX_AUDIO_BYTES` (default `8388608`, about 8MB per session)
 - `MAX_RECORDING_SECONDS` (default `30`, checked from decoded audio duration)
+- `AI_MEETING_SUMMARY_ENABLED` (default `false`)
+- `XIAOMI_API_KEY` (default empty; required only when AI summary is enabled)
+- `XIAOMI_API_BASE_URL` (default `https://token-plan-cn.xiaomimimo.com/v1`)
+- `XIAOMI_MODEL` (default `MiMo-V2.5`)
 
 ## CORS For Frontend
 
@@ -317,3 +382,17 @@ If model/runtime/ffmpeg/audio decode fails, API returns `ASR_ENGINE_ERROR`.
 If session audio bytes exceed `MAX_AUDIO_BYTES`, API returns `AUDIO_TOO_LARGE`.
 
 If decoded audio duration exceeds `MAX_RECORDING_SECONDS`, API returns `CONFIG_ERROR`.
+
+Enable optional MiMo meeting summary locally:
+
+```powershell
+cd D:\qiniu\backend
+.\.venv\Scripts\Activate.ps1
+
+$env:AI_MEETING_SUMMARY_ENABLED="true"
+$env:XIAOMI_API_KEY="your-local-api-key"
+$env:XIAOMI_API_BASE_URL="https://token-plan-cn.xiaomimimo.com/v1"
+$env:XIAOMI_MODEL="MiMo-V2.5"
+
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```

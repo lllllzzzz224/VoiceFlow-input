@@ -10,9 +10,11 @@ from uuid import uuid4
 
 from fastapi import FastAPI, Query, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from app.adapters.base import TranscriptionInput
 from app.adapters.faster_whisper import AsrProcessingError
+from app.adapters.xiaomi_mimo import MeetingSummaryProviderError, XiaomiMimoMeetingSummaryProvider
 from app.asr_service import get_asr_adapter
 from app.contracts import ErrorCode, ErrorInfo, StandardResult
 from app.history import history_store
@@ -24,10 +26,17 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=False,
-    allow_methods=["GET", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
 logger = logging.getLogger("voiceflow.backend")
+meeting_summary_provider = XiaomiMimoMeetingSummaryProvider()
+
+
+class MeetingSummaryRequest(BaseModel):
+    transcript: str
+    mode: str = "minutes"
+    include_original: bool = True
 
 
 def now_iso() -> str:
@@ -216,6 +225,89 @@ async def export_markdown(
     limited_items = sorted_items[:limit]
     markdown = build_history_markdown(limited_items, total_count=len(all_items), success_only=success_only)
     return Response(content=markdown, media_type="text/markdown; charset=utf-8")
+
+
+@app.post("/ai/meeting-summary")
+async def meeting_summary(payload: MeetingSummaryRequest) -> dict[str, Any]:
+    started = time.perf_counter()
+    transcript = payload.transcript.strip()
+    transcript_length = len(transcript)
+
+    if not settings.ai_meeting_summary_enabled:
+        result = error_result(ErrorCode.CONFIG_ERROR, "AI meeting summary is not configured.")
+        result.meta = {"ai_enabled": False, "ai_used": False}
+        return result.model_dump()
+
+    if not settings.xiaomi_api_key:
+        result = error_result(ErrorCode.CONFIG_ERROR, "AI meeting summary is not configured.")
+        result.meta = {"ai_enabled": False, "ai_used": False}
+        return result.model_dump()
+
+    if payload.mode != "minutes":
+        result = error_result(ErrorCode.VALIDATION_ERROR, "Only mode=minutes is supported.")
+        result.meta = {"ai_enabled": True, "ai_used": False}
+        return result.model_dump()
+
+    if not transcript:
+        result = error_result(ErrorCode.VALIDATION_ERROR, "Transcript is empty.")
+        result.meta = {"ai_enabled": True, "ai_used": False}
+        return result.model_dump()
+
+    try:
+        summary_markdown = await meeting_summary_provider.summarize(
+            transcript=transcript,
+            mode=payload.mode,
+            include_original=payload.include_original,
+        )
+        latency_ms = max(int((time.perf_counter() - started) * 1000), 1)
+        logger.info(
+            "meeting_summary provider=%s model=%s success=%s latency_ms=%s transcript_length=%s",
+            meeting_summary_provider.provider,
+            settings.xiaomi_model,
+            True,
+            latency_ms,
+            transcript_length,
+        )
+        result = ok_result(
+            data={
+                "summary_markdown": summary_markdown,
+                "provider": meeting_summary_provider.provider,
+                "model": settings.xiaomi_model,
+                "mode": payload.mode,
+            },
+            meta={
+                "latency_ms": latency_ms,
+                "ai_enabled": True,
+                "ai_used": True,
+            },
+        )
+        return result.model_dump()
+    except MeetingSummaryProviderError:
+        latency_ms = max(int((time.perf_counter() - started) * 1000), 1)
+        logger.error(
+            "meeting_summary provider=%s model=%s success=%s latency_ms=%s transcript_length=%s",
+            meeting_summary_provider.provider,
+            settings.xiaomi_model,
+            False,
+            latency_ms,
+            transcript_length,
+        )
+        result = error_result(ErrorCode.AI_PROVIDER_ERROR, "AI meeting summary generation failed.")
+        result.meta = {"latency_ms": latency_ms, "ai_enabled": True, "ai_used": True}
+        return result.model_dump()
+    except Exception:
+        latency_ms = max(int((time.perf_counter() - started) * 1000), 1)
+        logger.error(
+            "meeting_summary provider=%s model=%s success=%s latency_ms=%s transcript_length=%s",
+            meeting_summary_provider.provider,
+            settings.xiaomi_model,
+            False,
+            latency_ms,
+            transcript_length,
+        )
+        result = error_result(ErrorCode.AI_PROVIDER_ERROR, "AI meeting summary generation failed.")
+        result.meta = {"latency_ms": latency_ms, "ai_enabled": True, "ai_used": True}
+        return result.model_dump()
 
 
 @app.websocket("/ws/transcribe")
@@ -497,6 +589,7 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                     hotword_map=settings.hotword_map,
                     punctuation_enabled=settings.postprocess_punctuation_enabled,
                     spacing_enabled=settings.postprocess_spacing_enabled,
+                    simplified_chinese_enabled=settings.postprocess_simplified_chinese_enabled,
                 )
                 postprocess_ms = max(int((time.perf_counter() - postprocess_started) * 1000), 0)
                 total_ms = max(int((time.perf_counter() - total_started) * 1000), 1)
