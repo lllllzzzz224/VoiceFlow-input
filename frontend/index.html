@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceFlow Input — 语音输入助手</title>
+    <meta name="description" content="浏览器语音录音，实时转写文本，一键复制到剪贴板。">
+    <link rel="stylesheet" href="./css/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+
+        <header>
+            <h1>VoiceFlow Input</h1>
+            <!-- Connection + State badge row -->
+            <div class="header-meta">
+                <span id="conn-indicator" class="conn-dot disconnected" title="WebSocket 连接状态"></span>
+                <div id="status-badge" class="status-badge idle">
+                    <span class="pulse-dot"></span>
+                    <span id="status-text">准备就绪</span>
+                </div>
+            </div>
+        </header>
+
+        <main>
+            <!-- Transcript display -->
+            <div class="transcript-container">
+                <textarea
+                    id="transcript-box"
+                    placeholder="语音识别结果将在此显示…"
+                    readonly
+                    aria-label="转写结果"
+                ></textarea>
+
+                <div class="transcript-footer">
+                    <span id="latency-label" class="meta-text hidden"></span>
+                    <div class="actions">
+                        <button id="copy-btn" class="secondary-btn" disabled aria-label="复制文本">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24"
+                                 fill="none" stroke="currentColor" stroke-width="2"
+                                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                            </svg>
+                            复制文本
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Error message row (hidden by default) -->
+            <div id="error-bar" class="error-bar hidden" role="alert">
+                <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24"
+                     fill="none" stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <line x1="12" y1="8" x2="12" y2="12"></line>
+                    <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                </svg>
+                <span id="error-text"></span>
+            </div>
+
+            <!-- Record control -->
+            <div class="controls">
+                <button id="record-btn" class="primary-btn" aria-label="开始录音">
+                    <span class="btn-icon">
+                        <!-- Mic icon -->
+                        <svg id="mic-icon" xmlns="http://www.w3.org/2000/svg" width="22" height="22"
+                             viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+                            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                            <line x1="12" y1="19" x2="12" y2="22"></line>
+                        </svg>
+                        <!-- Stop icon -->
+                        <svg id="stop-icon" class="hidden" xmlns="http://www.w3.org/2000/svg" width="22" height="22"
+                             viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                            <rect x="5" y="5" width="14" height="14" rx="2" ry="2"></rect>
+                        </svg>
+                        <!-- Spinner icon (sending / transcribing) -->
+                        <svg id="spin-icon" class="hidden spin" xmlns="http://www.w3.org/2000/svg" width="22" height="22"
+                             viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M21 12a9 9 0 1 1-6.22-8.56"></path>
+                        </svg>
+                    </span>
+                    <span id="record-btn-text">开始录音</span>
+                </button>
+            </div>
+        </main>
+
+    </div>
+
+    <!-- Copy toast -->
+    <div id="toast" class="toast hidden" role="status" aria-live="polite">已复制到剪贴板 ✓</div>
+
+    <script src="./js/app.js"></script>
+</body>
+</html>
