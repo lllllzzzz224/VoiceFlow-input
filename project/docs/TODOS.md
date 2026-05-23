@@ -8,6 +8,25 @@
 
 ## Current Tasks
 
+### P1-006: Optional Xiaomi MiMo Meeting Minutes Agent
+
+Owner: backend
+Status: completed
+
+Scope:
+
+- Add `POST /ai/meeting-summary` with existing `StandardResult` shape.
+- Keep `/ws/transcribe` protocol unchanged.
+- MiMo provider handles text only and stays optional.
+- Return `CONFIG_ERROR` when AI summary is disabled or key is missing.
+- Return `AI_PROVIDER_ERROR` on provider failure without leaking secrets.
+- Add smoke test coverage for disabled, missing key, empty transcript, mocked provider success, and response sanitization.
+
+Validation:
+
+- `python -m compileall backend/app backend/tests`
+- `python backend/tests/meeting_summary_smoke.py`
+
 ### P0-001: Initialize Bootstrap Governance
 
 Owner: planner / controller

@@ -2,6 +2,7 @@
 import { onMounted, ref, watch } from 'vue'
 import { useWebSocket } from './composables/useWebSocket'
 import { useHistory } from './composables/useHistory'
+import { useMeetingAgent } from './composables/useMeetingAgent'
 
 const {
   state,
@@ -27,6 +28,16 @@ const {
   clearHistory,
   exportMarkdown
 } = useHistory()
+
+const {
+  summaryMarkdown,
+  summaryLoading,
+  summaryError,
+  summaryMeta,
+  generateSummary,
+  copySummary,
+  downloadSummary
+} = useMeetingAgent()
 
 const toastMessage = ref('')
 const toastVisible = ref(false)
@@ -76,15 +87,29 @@ watch(recordingTime, (newTime) => {
 })
 
 const handleCopyBtnClick = async () => {
-  if (!transcriptText.value) return
+  if (!transcriptText.value) return;
   try {
-    await navigator.clipboard.writeText(transcriptText.value)
-    showToast('已复制到剪贴板 ✓')
+    await navigator.clipboard.writeText(transcriptText.value);
+    showToast('复制成功！');
   } catch (err) {
-    console.error('Copy failed:', err)
-    showToast('复制失败，请手动选择复制')
+    showToast('复制失败，请手动复制', 3000);
   }
-}
+};
+
+const handleGenerateSummary = async () => {
+  const textToSummarize = finalText.value || rawText.value || transcriptText.value;
+  if (!textToSummarize) return;
+  await generateSummary(textToSummarize);
+};
+
+const handleCopySummaryBtnClick = async () => {
+  const success = await copySummary();
+  if (success) {
+    showToast('会议纪要复制成功！');
+  } else {
+    showToast('复制失败，请手动复制');
+  }
+};
 
 onMounted(() => {
   fetchHistory()
@@ -150,6 +175,41 @@ onMounted(() => {
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
               复制
             </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Meeting Minutes Agent Panel -->
+      <div class="meeting-agent-panel">
+        <div class="panel-header">
+          <h2>会议纪要 Agent</h2>
+          <button 
+            class="primary-btn sm-btn" 
+            :disabled="!transcriptText || summaryLoading"
+            @click="handleGenerateSummary"
+          >
+            <span v-if="summaryLoading" class="spinner"></span>
+            {{ summaryLoading ? '正在生成...' : '生成会议纪要' }}
+          </button>
+        </div>
+        
+        <div v-if="summaryError" class="agent-error-box">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+          {{ summaryError }}
+        </div>
+
+        <div v-if="summaryMarkdown && !summaryLoading" class="summary-result-area">
+          <div class="summary-meta" v-if="summaryMeta">
+            <span class="meta-badge">提供商: {{ summaryMeta.provider }}</span>
+            <span class="meta-badge">模型: {{ summaryMeta.model }}</span>
+            <span class="meta-badge" v-if="summaryMeta.latency_ms">耗时: {{ summaryMeta.latency_ms }}ms</span>
+          </div>
+          <div class="summary-markdown-content">
+            <pre>{{ summaryMarkdown }}</pre>
+          </div>
+          <div class="summary-actions">
+            <button class="secondary-btn" @click="handleCopySummaryBtnClick">复制纪要</button>
+            <button class="secondary-btn" @click="downloadSummary">下载 Markdown</button>
           </div>
         </div>
       </div>

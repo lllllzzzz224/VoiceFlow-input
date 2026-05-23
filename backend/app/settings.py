@@ -19,9 +19,23 @@ class Settings:
         self.faster_whisper_vad_filter = self._parse_bool(os.getenv("FASTER_WHISPER_VAD_FILTER", "true").strip(), True)
         self.default_language = os.getenv("DEFAULT_LANGUAGE", "zh").strip() or "zh"
         self.asr_initial_prompt = os.getenv("ASR_INITIAL_PROMPT", "").strip()
+        self.ai_meeting_summary_enabled = self._parse_bool(
+            os.getenv("AI_MEETING_SUMMARY_ENABLED", "false").strip(),
+            False,
+        )
+        self.xiaomi_api_key = os.getenv("XIAOMI_API_KEY", "").strip()
+        self.xiaomi_api_base_url = (
+            os.getenv("XIAOMI_API_BASE_URL", "https://token-plan-cn.xiaomimimo.com/v1").strip()
+            or "https://token-plan-cn.xiaomimimo.com/v1"
+        )
+        self.xiaomi_model = os.getenv("XIAOMI_MODEL", "MiMo-V2.5").strip() or "MiMo-V2.5"
 
         self.postprocess_punctuation_enabled = os.getenv("POSTPROCESS_PUNCTUATION_ENABLED", "true").strip().lower() != "false"
         self.postprocess_spacing_enabled = os.getenv("POSTPROCESS_SPACING_ENABLED", "true").strip().lower() != "false"
+        self.postprocess_simplified_chinese_enabled = self._parse_bool(
+            os.getenv("POSTPROCESS_SIMPLIFIED_CHINESE_ENABLED", "true").strip(),
+            True,
+        )
         self.history_file_path = os.getenv("HISTORY_FILE_PATH", "data/history.json").strip() or "data/history.json"
         self.max_audio_bytes = self._parse_max_audio_bytes(os.getenv("MAX_AUDIO_BYTES", "8388608").strip())
         self.max_recording_seconds = self._parse_max_recording_seconds(os.getenv("MAX_RECORDING_SECONDS", "30").strip())

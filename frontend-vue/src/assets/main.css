@@ -555,3 +555,84 @@ button:disabled {
   opacity: 0.6;
   filter: grayscale(80%);
 }
+
+/* ============================================
+   Meeting Agent Panel
+   ============================================ */
+.meeting-agent-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  margin-top: 15px;
+}
+.meeting-agent-panel .panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+.meeting-agent-panel h2 {
+  font-size: 1.1rem;
+  font-weight: 500;
+  margin: 0;
+}
+.sm-btn {
+  padding: 6px 12px;
+  font-size: 0.85rem;
+}
+.agent-error-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--red);
+  border-radius: 6px;
+  font-size: 0.9rem;
+  margin-top: 10px;
+}
+.summary-result-area {
+  margin-top: 15px;
+}
+.summary-meta {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.summary-markdown-content {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 15px;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: var(--text-primary);
+  max-height: 400px;
+  overflow-y: auto;
+}
+.summary-markdown-content pre {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: inherit;
+  margin: 0;
+}
+.summary-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 15px;
+}
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-radius: 50%;
+  border-top-color: #fff;
+  animation: spin 1s ease-in-out infinite;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

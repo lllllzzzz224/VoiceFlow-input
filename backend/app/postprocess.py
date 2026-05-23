@@ -17,6 +17,13 @@ _COMMON_CASE_MAP = {
 }
 
 
+def _to_simplified_chinese(text: str) -> str:
+    from opencc import OpenCC
+
+    converter = OpenCC("t2s")
+    return converter.convert(text)
+
+
 def _normalize_spacing(text: str) -> str:
     cleaned = re.sub(r"\s+", " ", text).strip()
     if not cleaned:
@@ -71,18 +78,30 @@ def run_postprocess(
     hotword_map: dict[str, str],
     punctuation_enabled: bool = True,
     spacing_enabled: bool = True,
+    simplified_chinese_enabled: bool = True,
 ) -> tuple[str, list[AppliedCorrection], str | None]:
     try:
         working = raw_text or ""
-        corrections: list[AppliedCorrection] = []
+        warning: str | None = None
+
+        if simplified_chinese_enabled and working:
+            try:
+                working = _to_simplified_chinese(working)
+            except Exception as exc:
+                warning = f"POSTPROCESS_SIMPLIFIED_CHINESE_UNAVAILABLE: {exc}"
+
         if spacing_enabled:
             working = _normalize_spacing(working)
+
+        corrections: list[AppliedCorrection] = []
         working, case_corrections = _apply_common_case_corrections(working)
         corrections.extend(case_corrections)
         working, hotword_corrections = _apply_hotwords(working, hotword_map)
         corrections.extend(hotword_corrections)
+
         if punctuation_enabled:
             working = _append_punctuation(working)
-        return working, corrections, None
+
+        return working, corrections, warning
     except Exception as exc:
         return raw_text, [], f"POSTPROCESS_ERROR: {exc}"
