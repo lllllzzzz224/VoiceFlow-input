@@ -22,6 +22,8 @@ temp/
 tmp/
 backend/data/*.json
 data/*.json
+backend/ffmpeg.exe
+backend/*.dll
 *.wav
 *.mp3
 *.m4a
