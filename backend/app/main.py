@@ -54,6 +54,11 @@ def append_history_item(
     latency_ms: int,
     success: bool,
     error_code: str | None,
+    audio_duration_ms: int = 0,
+    decode_ms: int = 0,
+    asr_ms: int = 0,
+    postprocess_ms: int = 0,
+    total_ms: int = 0,
 ) -> None:
     history_store.append(
         {
@@ -65,6 +70,11 @@ def append_history_item(
             "latency_ms": latency_ms,
             "success": success,
             "error_code": error_code,
+            "audio_duration_ms": audio_duration_ms,
+            "decode_ms": decode_ms,
+            "asr_ms": asr_ms,
+            "postprocess_ms": postprocess_ms,
+            "total_ms": total_ms,
         }
     )
 
@@ -127,6 +137,11 @@ def build_history_markdown(items: list[dict[str, Any]], total_count: int, succes
         text_out = final_text if final_text else raw_text
         engine = str(item.get("engine", ""))
         latency_ms = item.get("latency_ms", "")
+        audio_duration_ms = item.get("audio_duration_ms", "")
+        decode_ms = item.get("decode_ms", "")
+        asr_ms = item.get("asr_ms", "")
+        postprocess_ms = item.get("postprocess_ms", "")
+        total_ms = item.get("total_ms", "")
         success = item.get("success")
         error_code = item.get("error_code")
 
@@ -134,6 +149,11 @@ def build_history_markdown(items: list[dict[str, Any]], total_count: int, succes
         lines.append("")
         lines.append(f"- engine: {engine}")
         lines.append(f"- latency_ms: {latency_ms}")
+        lines.append(f"- audio_duration_ms: {audio_duration_ms}")
+        lines.append(f"- decode_ms: {decode_ms}")
+        lines.append(f"- asr_ms: {asr_ms}")
+        lines.append(f"- postprocess_ms: {postprocess_ms}")
+        lines.append(f"- total_ms: {total_ms}")
         if success:
             lines.append("- success: true")
         else:
@@ -155,9 +175,25 @@ async def health() -> dict[str, Any]:
 
 
 @app.get("/history")
-async def get_history() -> dict[str, Any]:
-    items = history_store.list_items()
-    result = ok_result(data={"items": items, "count": len(items)}, meta={"time": now_iso()})
+async def get_history(
+    limit: int = Query(default=50, ge=1, le=200),
+    success_only: bool = Query(default=False),
+) -> dict[str, Any]:
+    all_items = history_store.list_items()
+    sorted_items = sorted(all_items, key=lambda item: _parse_created_at(item.get("created_at")), reverse=True)
+    if success_only:
+        sorted_items = [item for item in sorted_items if item.get("success") is True]
+    limited_items = sorted_items[:limit]
+    result = ok_result(
+        data={
+            "items": limited_items,
+            "count": len(limited_items),
+            "total_count": len(all_items),
+            "success_only": success_only,
+            "limit": limit,
+        },
+        meta={"time": now_iso()},
+    )
     return result.model_dump()
 
 
@@ -311,6 +347,7 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                         latency_ms=0,
                         success=False,
                         error_code=ErrorCode.NO_SPEECH_DETECTED.value,
+                        total_ms=max(int((time.perf_counter() - total_started) * 1000), 1),
                     )
                     await websocket.send_json(
                         {
@@ -339,6 +376,8 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                 except AsrProcessingError as exc:
                     details = asr_error_details(exc)
                     if exc.reason == "audio_too_long":
+                        overflow_duration = int(details.get("audio_duration_ms", 0) or 0)
+                        overflow_total_ms = max(int((time.perf_counter() - total_started) * 1000), 1)
                         append_history_item(
                             raw_text="",
                             final_text="",
@@ -346,6 +385,8 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                             latency_ms=0,
                             success=False,
                             error_code=ErrorCode.CONFIG_ERROR.value,
+                            audio_duration_ms=overflow_duration,
+                            total_ms=overflow_total_ms,
                         )
                         await websocket.send_json(
                             {
@@ -372,6 +413,7 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                         latency_ms=0,
                         success=False,
                         error_code=ErrorCode.ASR_ENGINE_ERROR.value,
+                        total_ms=max(int((time.perf_counter() - total_started) * 1000), 1),
                     )
                     await websocket.send_json(
                         {
@@ -393,6 +435,7 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                         latency_ms=0,
                         success=False,
                         error_code=ErrorCode.ASR_ENGINE_ERROR.value,
+                        total_ms=max(int((time.perf_counter() - total_started) * 1000), 1),
                     )
                     await websocket.send_json(
                         {
@@ -421,6 +464,7 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                         latency_ms=0,
                         success=False,
                         error_code=ErrorCode.ASR_ENGINE_ERROR.value,
+                        total_ms=max(int((time.perf_counter() - total_started) * 1000), 1),
                     )
                     await websocket.send_json(
                         {
@@ -470,6 +514,11 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                     latency_ms=transcription.latency_ms,
                     success=True,
                     error_code=None,
+                    audio_duration_ms=adapter_output.audio_duration_ms,
+                    decode_ms=adapter_output.decode_ms,
+                    asr_ms=adapter_output.asr_ms,
+                    postprocess_ms=postprocess_ms,
+                    total_ms=total_ms,
                 )
                 await websocket.send_json({"type": "transcription_result", "result": result.model_dump()})
                 await websocket.close()

@@ -57,6 +57,11 @@ def main() -> None:
                 assert "mock transcription" in default_md
                 assert "- engine:" in default_md
                 assert "- latency_ms:" in default_md
+                assert "- audio_duration_ms:" in default_md
+                assert "- decode_ms:" in default_md
+                assert "- asr_ms:" in default_md
+                assert "- postprocess_ms:" in default_md
+                assert "- total_ms:" in default_md
 
                 limit_resp = client.get("/export/markdown?limit=1")
                 assert limit_resp.status_code == 200
@@ -64,6 +69,12 @@ def main() -> None:
                 assert "- Exported Count: 1" in limit_md
                 assert limit_md.count("### ") == 1
                 assert "NO_SPEECH_DETECTED" in limit_md
+
+                limit_two_resp = client.get("/export/markdown?limit=2")
+                assert limit_two_resp.status_code == 200
+                limit_two_md = limit_two_resp.text
+                assert "- Exported Count: 2" in limit_two_md
+                assert limit_two_md.count("### ") == 2
 
                 success_only_resp = client.get("/export/markdown?success_only=true")
                 assert success_only_resp.status_code == 200

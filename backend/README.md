@@ -179,7 +179,7 @@ Server final message shape:
 ### History API
 
 ```http
-GET /history
+GET /history?limit=50&success_only=false
 DELETE /history
 ```
 
@@ -196,14 +196,23 @@ DELETE /history
       "engine": "mock",
       "latency_ms": 1,
       "success": true,
-      "error_code": null
+      "error_code": null,
+      "audio_duration_ms": 1250,
+      "decode_ms": 120,
+      "asr_ms": 610,
+      "postprocess_ms": 3,
+      "total_ms": 745
     }
   ],
-  "count": 1
+  "count": 1,
+  "total_count": 1,
+  "success_only": false,
+  "limit": 50
 }
 ```
 
 History is stored in local JSON and does not include raw audio.
+Failure records only keep `error_code` and base metadata (engine/timing), with empty transcript text.
 
 ### Markdown Export API
 
@@ -238,7 +247,7 @@ Environment variables:
 - `MOCK_RESPONSE_TEXT` (`mock transcription` by default)
 - `POSTPROCESS_PUNCTUATION_ENABLED` (`true` by default)
 - `POSTPROCESS_SPACING_ENABLED` (`true` by default)
-- `HOTWORD_MAP_JSON` (JSON object string, optional)
+- `HOTWORD_MAP_JSON` (JSON object string, optional; defaults include `七牛云`, `Kodo`, `MCP`, `GitHub`, `FastAPI`, `faster-whisper`, `WebSocket`)
 - `HISTORY_FILE_PATH` (`data/history.json` by default)
 - `CORS_ORIGINS` (comma-separated, default includes `http://localhost:8080,http://127.0.0.1:8080`)
 - `MAX_AUDIO_BYTES` (default `8388608`, about 8MB per session)

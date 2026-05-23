@@ -5,16 +5,39 @@ import re
 from app.contracts import AppliedCorrection
 
 _CJK_BLOCK = r"\u4e00-\u9fff"
+_SENTENCE_ENDINGS = "。！？!?;；."
+_COMMON_CASE_MAP = {
+    "github": "GitHub",
+    "websocket": "WebSocket",
+    "fastapi": "FastAPI",
+    "faster whisper": "faster-whisper",
+    "faster-whisper": "faster-whisper",
+    "kodo": "Kodo",
+    "mcp": "MCP",
+}
 
 
 def _normalize_spacing(text: str) -> str:
     cleaned = re.sub(r"\s+", " ", text).strip()
     if not cleaned:
         return cleaned
+    cleaned = re.sub(r"\s+([,.;!?，。！？；：])", r"\1", cleaned)
     cleaned = re.sub(rf"([{_CJK_BLOCK}])\s+([{_CJK_BLOCK}])", r"\1\2", cleaned)
     cleaned = re.sub(rf"([{_CJK_BLOCK}])([A-Za-z0-9])", r"\1 \2", cleaned)
     cleaned = re.sub(rf"([A-Za-z0-9])([{_CJK_BLOCK}])", r"\1 \2", cleaned)
     return cleaned.strip()
+
+
+def _apply_common_case_corrections(text: str) -> tuple[str, list[AppliedCorrection]]:
+    result = text
+    applied: list[AppliedCorrection] = []
+    for source, target in _COMMON_CASE_MAP.items():
+        pattern = re.compile(rf"(?<![A-Za-z0-9-]){re.escape(source)}(?![A-Za-z0-9-])", flags=re.IGNORECASE)
+        if pattern.search(result) is None:
+            continue
+        result = pattern.sub(target, result)
+        applied.append(AppliedCorrection(from_text=source, to_text=target, correction_type="case"))
+    return result, applied
 
 
 def _apply_hotwords(text: str, hotword_map: dict[str, str]) -> tuple[str, list[AppliedCorrection]]:
@@ -34,9 +57,13 @@ def _apply_hotwords(text: str, hotword_map: dict[str, str]) -> tuple[str, list[A
 def _append_punctuation(text: str) -> str:
     if not text:
         return text
-    if text[-1] in "。！？.!?":
+    if text[-1] in _SENTENCE_ENDINGS:
+        if re.search(rf"[{_CJK_BLOCK}]", text):
+            return text[:-1] + "。" if text[-1] == "." else text
         return text
-    return f"{text}。"
+    if re.search(rf"[{_CJK_BLOCK}]", text):
+        return f"{text}。"
+    return f"{text}."
 
 
 def run_postprocess(
@@ -47,12 +74,15 @@ def run_postprocess(
 ) -> tuple[str, list[AppliedCorrection], str | None]:
     try:
         working = raw_text or ""
+        corrections: list[AppliedCorrection] = []
         if spacing_enabled:
             working = _normalize_spacing(working)
-        working, corrections = _apply_hotwords(working, hotword_map)
+        working, case_corrections = _apply_common_case_corrections(working)
+        corrections.extend(case_corrections)
+        working, hotword_corrections = _apply_hotwords(working, hotword_map)
+        corrections.extend(hotword_corrections)
         if punctuation_enabled:
             working = _append_punctuation(working)
         return working, corrections, None
     except Exception as exc:
         return raw_text, [], f"POSTPROCESS_ERROR: {exc}"
-

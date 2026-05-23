@@ -319,13 +319,22 @@ Rules:
   "created_at": "2026-05-23T00:00:00+08:00",
   "raw_text": "string",
   "final_text": "string",
-  "duration_ms": 3200,
   "latency_ms": 850,
+  "audio_duration_ms": 3200,
+  "decode_ms": 120,
+  "asr_ms": 610,
+  "postprocess_ms": 3,
+  "total_ms": 745,
   "engine": "faster_whisper",
   "success": true,
   "error_code": null
 }
 ```
+
+`GET /history` supports query params:
+
+- `limit` (default `50`, min `1`, max `200`)
+- `success_only` (default `false`)
 
 ## Markdown Export Contract
 
