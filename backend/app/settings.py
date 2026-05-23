@@ -19,7 +19,35 @@ class Settings:
         self.postprocess_punctuation_enabled = os.getenv("POSTPROCESS_PUNCTUATION_ENABLED", "true").strip().lower() != "false"
         self.postprocess_spacing_enabled = os.getenv("POSTPROCESS_SPACING_ENABLED", "true").strip().lower() != "false"
         self.history_file_path = os.getenv("HISTORY_FILE_PATH", "data/history.json").strip() or "data/history.json"
+        self.max_audio_bytes = self._parse_max_audio_bytes(os.getenv("MAX_AUDIO_BYTES", "8388608").strip())
+        self.cors_origins = self._load_cors_origins()
         self.hotword_map = self._load_hotword_map()
+
+    def _parse_max_audio_bytes(self, raw: str) -> int:
+        try:
+            value = int(raw)
+            return value if value > 0 else 8388608
+        except Exception:
+            return 8388608
+
+    def _load_cors_origins(self) -> list[str]:
+        default_origins = [
+            "http://localhost:8080",
+            "http://127.0.0.1:8080",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ]
+        raw = os.getenv("CORS_ORIGINS", "").strip()
+        if not raw:
+            return default_origins
+        values = [item.strip() for item in raw.split(",") if item.strip()]
+        if not values:
+            return default_origins
+        merged: list[str] = []
+        for origin in default_origins + values:
+            if origin not in merged:
+                merged.append(origin)
+        return merged
 
     def _load_hotword_map(self) -> dict[str, str]:
         default_map = {

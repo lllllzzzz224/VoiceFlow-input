@@ -215,3 +215,21 @@ Impact:
 Do Not Do:
 
 不要把“当前不做桌面”理解为“删除桌面路线”；也不要把参考项目源码拉进仓库。
+
+## D-013: Migrate Frontend to Vue 3 (Vite)
+
+Decision:
+
+将前端的基线从原生 HTML/JS/CSS 迁移到使用 Vue 3 和 Vite 的工程化架构。
+
+Reason:
+
+虽然早期 MVP 使用 Vanilla JS 能够最快闭环，但随着引入历史记录、下载导出以及更丰富和现代化的界面交互，原生方案导致 DOM 操作变得难以维护。引入 Vue 3 不仅能提升长期可维护性，还可以更优雅地实现参考项目 (如 WhisperLive) 中流畅的微动画和富响应式界面，同时遵循不抄袭源码的底线。
+
+Impact:
+
+现有的原生前端目录重命名为 `frontend-vanilla` 作为备案。新的界面逻辑全部在 `frontend/` 下按 Vue 3 SFC 规范实现，并在此基础上构建更高级的玻璃拟物化 UI 与动画效果。
+
+Do Not Do:
+
+不要在没有记录架构变更的情况下随意引入重型框架。不要过度引入无必要的 UI 组件库（如全套 Element/Vuetify），尽量保持 CSS 的掌控力与简洁度。

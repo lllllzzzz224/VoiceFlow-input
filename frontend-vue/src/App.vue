@@ -1,0 +1,200 @@
+<script setup>
+import { onMounted, ref } from 'vue'
+import { useWebSocket } from './composables/useWebSocket'
+import { useHistory } from './composables/useHistory'
+
+const {
+  state,
+  statusText,
+  errorText,
+  transcriptText,
+  latencyInfo,
+  isConnected,
+  isConnError,
+  recordingTime,
+  startRecording,
+  stopRecording
+} = useWebSocket()
+
+const {
+  historyItems,
+  historyError,
+  fetchHistory,
+  clearHistory,
+  exportMarkdown
+} = useHistory()
+
+const copyToastVisible = ref(false)
+const hideErrorHistory = ref(true)
+
+const formatTime = (seconds) => {
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+const handleRecordBtnClick = () => {
+  if (['idle', 'done', 'error'].includes(state.value)) {
+    // When done recording, fetch history automatically
+    startRecording(() => {
+      fetchHistory()
+    })
+  } else if (state.value === 'recording') {
+    stopRecording()
+  }
+}
+
+const handleCopyBtnClick = async () => {
+  if (!transcriptText.value) return
+  try {
+    await navigator.clipboard.writeText(transcriptText.value)
+    copyToastVisible.value = true
+    setTimeout(() => {
+      copyToastVisible.value = false
+    }, 2000)
+  } catch (err) {
+    console.error('Copy failed:', err)
+    // We can just alert or update a local error state, but sticking to the simple pattern:
+    alert('复制失败，请手动选择复制')
+  }
+}
+
+onMounted(() => {
+  fetchHistory()
+})
+</script>
+
+<template>
+  <div class="app-container">
+    <header>
+      <h1>VoiceFlow Input</h1>
+      <div class="header-meta">
+        <span 
+          class="conn-dot" 
+          :class="{ 'connected': isConnected, 'disconnected': !isConnected && !isConnError, 'error': isConnError }"
+          title="WebSocket 连接状态"
+        ></span>
+        <div class="status-badge" :class="state">
+          <span class="pulse-dot"></span>
+          <span>{{ statusText }}</span>
+          <span v-if="state === 'recording'" class="timer-text">{{ formatTime(recordingTime) }}</span>
+          <div v-if="state === 'transcribing'" class="decoding-wave" aria-hidden="true">
+            <span class="bar"></span>
+            <span class="bar"></span>
+            <span class="bar"></span>
+            <span class="bar"></span>
+            <span class="bar"></span>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <!-- Transcript Box -->
+      <div class="transcript-container">
+        <textarea
+          placeholder="语音识别结果将在此显示…"
+          readonly
+          aria-label="转写结果"
+          :value="transcriptText"
+        ></textarea>
+
+        <div class="transcript-footer">
+          <span class="meta-text">
+            <template v-if="latencyInfo">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+              {{ latencyInfo }}
+            </template>
+          </span>
+          <div class="actions">
+            <button class="secondary-btn" :disabled="!transcriptText" @click="handleCopyBtnClick" aria-label="复制文本">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+              复制
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Main Error Bar -->
+      <div v-if="state === 'error' && errorText" class="error-bar" role="alert">
+        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+        <span>{{ errorText }}</span>
+      </div>
+
+      <!-- Record Control -->
+      <div class="controls">
+        <button 
+          class="primary-btn" 
+          :class="{ 'recording': state === 'recording', 'busy': ['sending', 'transcribing'].includes(state) }" 
+          @click="handleRecordBtnClick"
+        >
+          <span class="btn-icon">
+            <svg v-if="['idle', 'done', 'error'].includes(state)" xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>
+            <svg v-else-if="state === 'recording'" xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2" ry="2"></rect></svg>
+            <div v-else-if="state === 'transcribing'" class="decoding-wave" aria-hidden="true">
+              <span class="bar"></span>
+              <span class="bar"></span>
+              <span class="bar"></span>
+              <span class="bar"></span>
+              <span class="bar"></span>
+            </div>
+            <svg v-else class="spin" xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.22-8.56"></path></svg>
+          </span>
+          <span>
+            {{ state === 'recording' ? '停止录音' : (['sending', 'transcribing'].includes(state) ? '处理中' : (state === 'done' ? '重新录音' : '开始录音')) }}
+          </span>
+        </button>
+      </div>
+
+      <!-- History Section -->
+      <div class="history-container">
+        <div class="history-header">
+          <h2>
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M18 9l-5 5-4-4-5 5"/></svg>
+            历史记录
+          </h2>
+          <div class="history-actions">
+            <label class="history-toggle-label">
+              <input type="checkbox" v-model="hideErrorHistory">
+              隐藏失败记录
+            </label>
+            <button class="secondary-btn" @click="fetchHistory" aria-label="刷新历史">刷新</button>
+            <button class="secondary-btn danger" @click="clearHistory" aria-label="清空历史">清空</button>
+            <button class="secondary-btn" @click="exportMarkdown" aria-label="导出 Markdown">导出 MD</button>
+          </div>
+        </div>
+
+        <div v-if="historyError" class="error-bar" role="alert">
+          <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+          <span>{{ historyError }}</span>
+        </div>
+
+        <div class="history-list">
+          <div v-if="!historyItems || historyItems.length === 0" class="history-empty">
+            暂无历史记录
+          </div>
+          <template v-else>
+            <div 
+              v-for="item in historyItems" 
+              :key="item.id" 
+              class="history-item" 
+              :class="{ 'error': !item.success }"
+              v-show="!(!item.success && hideErrorHistory)"
+            >
+            <div class="history-item-header">
+              <span>{{ new Date(item.created_at).toLocaleString('zh-CN') }}</span>
+              <span>引擎: {{ item.engine || '未知' }} | 延迟: {{ item.latency_ms || 0 }}ms</span>
+            </div>
+            <div class="history-item-body">
+              {{ !item.success ? `[失败] ${item.error_code || '未知错误'}` : (item.final_text || item.raw_text || '') }}
+            </div>
+            </div>
+          </template>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Global Toast -->
+  <div class="toast" :class="{ 'hidden': !copyToastVisible }" role="status" aria-live="polite">已复制到剪贴板 ✓</div>
+</template>
