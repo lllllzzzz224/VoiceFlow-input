@@ -158,6 +158,8 @@ Server final message shape:
       "asr_ms": 1,
       "postprocess_ms": 0,
       "total_ms": 2,
+      "audio_duration_ms": 1250,
+      "model_cached": true,
       "time": "2026-05-23T00:00:00+00:00"
     }
   }
@@ -171,6 +173,8 @@ Server final message shape:
 - `asr_ms`: model inference stage latency
 - `postprocess_ms`: text postprocessing latency
 - `total_ms`: total latency from `end` handling to final response
+- `audio_duration_ms`: decoded audio duration after ffmpeg resample
+- `model_cached`: whether current recognition reused cached model instance
 
 ### History API
 
@@ -238,6 +242,7 @@ Environment variables:
 - `HISTORY_FILE_PATH` (`data/history.json` by default)
 - `CORS_ORIGINS` (comma-separated, default includes `http://localhost:8080,http://127.0.0.1:8080`)
 - `MAX_AUDIO_BYTES` (default `8388608`, about 8MB per session)
+- `MAX_RECORDING_SECONDS` (default `30`, checked from decoded audio duration)
 
 ## CORS For Frontend
 
@@ -297,3 +302,5 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 If model/runtime/ffmpeg/audio decode fails, API returns `ASR_ENGINE_ERROR`.
 
 If session audio bytes exceed `MAX_AUDIO_BYTES`, API returns `AUDIO_TOO_LARGE`.
+
+If decoded audio duration exceeds `MAX_RECORDING_SECONDS`, API returns `CONFIG_ERROR`.

@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useWebSocket } from './composables/useWebSocket'
 import { useHistory } from './composables/useHistory'
 
@@ -24,7 +24,19 @@ const {
   exportMarkdown
 } = useHistory()
 
-const copyToastVisible = ref(false)
+const toastMessage = ref('')
+const toastVisible = ref(false)
+let toastTimeout = null
+
+const showToast = (msg, duration = 3000) => {
+  toastMessage.value = msg
+  toastVisible.value = true
+  if (toastTimeout) clearTimeout(toastTimeout)
+  toastTimeout = setTimeout(() => {
+    toastVisible.value = false
+  }, duration)
+}
+
 const hideErrorHistory = ref(true)
 
 const formatTime = (seconds) => {
@@ -35,27 +47,38 @@ const formatTime = (seconds) => {
 
 const handleRecordBtnClick = () => {
   if (['idle', 'done', 'error'].includes(state.value)) {
-    // When done recording, fetch history automatically
     startRecording(() => {
       fetchHistory()
     })
   } else if (state.value === 'recording') {
-    stopRecording()
+    if (recordingTime.value < 1) {
+      showToast('录音太短，请至少录制 1 秒')
+      stopRecording(true) // abort sending
+      return
+    }
+    stopRecording(false)
   }
 }
+
+watch(recordingTime, (newTime) => {
+  if (state.value === 'recording') {
+    if (newTime === 15) {
+      showToast('建议分段输入，单次录音建议在 2-15 秒之间', 4000)
+    } else if (newTime >= 30) {
+      showToast('已达到最大录音时长（30秒），自动提交识别')
+      stopRecording(false)
+    }
+  }
+})
 
 const handleCopyBtnClick = async () => {
   if (!transcriptText.value) return
   try {
     await navigator.clipboard.writeText(transcriptText.value)
-    copyToastVisible.value = true
-    setTimeout(() => {
-      copyToastVisible.value = false
-    }, 2000)
+    showToast('已复制到剪贴板 ✓')
   } catch (err) {
     console.error('Copy failed:', err)
-    // We can just alert or update a local error state, but sticking to the simple pattern:
-    alert('复制失败，请手动选择复制')
+    showToast('复制失败，请手动选择复制')
   }
 }
 
@@ -93,7 +116,7 @@ onMounted(() => {
       <!-- Transcript Box -->
       <div class="transcript-container">
         <textarea
-          placeholder="语音识别结果将在此显示…"
+          :placeholder="['sending', 'transcribing'].includes(state) ? '正在为您处理录音，非实时逐字输出，请稍候...' : '语音识别结果将在此显示…'"
           readonly
           aria-label="转写结果"
           :value="transcriptText"
@@ -196,5 +219,5 @@ onMounted(() => {
   </div>
 
   <!-- Global Toast -->
-  <div class="toast" :class="{ 'hidden': !copyToastVisible }" role="status" aria-live="polite">已复制到剪贴板 ✓</div>
+  <div class="toast" :class="{ 'hidden': !toastVisible }" role="status" aria-live="polite">{{ toastMessage }}</div>
 </template>

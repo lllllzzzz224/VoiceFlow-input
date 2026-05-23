@@ -7,11 +7,21 @@ from app.adapters.xiaomi_api import XiaomiApiAdapter
 from app.contracts import AsrEngine
 from app.settings import settings
 
+_ADAPTERS: dict[AsrEngine, AsrAdapter] = {}
 
 def get_asr_adapter() -> AsrAdapter:
-    if settings.asr_engine == AsrEngine.FASTER_WHISPER:
-        return FasterWhisperAdapter()
-    if settings.asr_engine == AsrEngine.XIAOMI_API:
-        return XiaomiApiAdapter()
-    return MockAsrAdapter(default_text=settings.mock_response_text)
+    engine = settings.asr_engine
+    cached = _ADAPTERS.get(engine)
+    if cached is not None:
+        return cached
+
+    if engine == AsrEngine.FASTER_WHISPER:
+        adapter: AsrAdapter = FasterWhisperAdapter()
+    elif engine == AsrEngine.XIAOMI_API:
+        adapter = XiaomiApiAdapter()
+    else:
+        adapter = MockAsrAdapter(default_text=settings.mock_response_text)
+
+    _ADAPTERS[engine] = adapter
+    return adapter
 

@@ -72,6 +72,7 @@ MIC_PERMISSION_DENIED
 MIC_DEVICE_NOT_FOUND
 NO_SPEECH_DETECTED
 AUDIO_CAPTURE_ERROR
+AUDIO_TOO_LARGE
 ASR_ENGINE_ERROR
 ASR_TIMEOUT
 POSTPROCESS_ERROR
@@ -221,6 +222,12 @@ Current backend envelope:
       "model": "mock-v1",
       "cost_cents": 0,
       "bytes_received": 4096,
+      "decode_ms": 0,
+      "asr_ms": 1,
+      "postprocess_ms": 0,
+      "total_ms": 2,
+      "audio_duration_ms": 250,
+      "model_cached": true,
       "time": "2026-05-23T00:00:00+00:00"
     }
   }

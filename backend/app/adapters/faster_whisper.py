@@ -15,67 +15,95 @@ from app.adapters.base import AdapterTranscriptionResult, TranscriptionInput
 from app.contracts import AsrEngine, Segment, TranscriptionData
 from app.settings import settings
 
-# Target sample rate expected by Whisper models.
 _WHISPER_SAMPLE_RATE = 16000
 
 
 class AsrProcessingError(RuntimeError):
-    def __init__(self, reason: str, message: str) -> None:
+    def __init__(self, reason: str, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.reason = reason
         self.message = message
+        self.details = details or {}
+
+
+def _is_ffmpeg_runnable(binary_path: str) -> bool:
+    try:
+        proc = subprocess.run([binary_path, "-version"], capture_output=True, timeout=5)
+        return proc.returncode == 0
+    except Exception:
+        return False
 
 
 def _find_ffmpeg() -> str:
-    """Locate the ffmpeg binary. Checks PATH first, then falls back to
-    the backend working directory (useful for bundled desktop builds)."""
+    env_binary = os.getenv("FFMPEG_BINARY", "").strip()
+    if env_binary and os.path.isfile(env_binary) and _is_ffmpeg_runnable(env_binary):
+        return os.path.abspath(env_binary)
+
     found = shutil.which("ffmpeg")
-    if found:
+    if found and _is_ffmpeg_runnable(found):
         return found
-    # Check common local locations relative to the backend root.
-    for candidate in ["ffmpeg.exe", "ffmpeg", os.path.join("bin", "ffmpeg.exe"), os.path.join("bin", "ffmpeg")]:
-        if os.path.isfile(candidate):
+
+    for candidate in [
+        "ffmpeg.exe",
+        "ffmpeg",
+        os.path.join("bin", "ffmpeg.exe"),
+        os.path.join("bin", "ffmpeg"),
+    ]:
+        if os.path.isfile(candidate) and _is_ffmpeg_runnable(candidate):
             return os.path.abspath(candidate)
-    raise AsrProcessingError("ffmpeg_missing", "ffmpeg not found in PATH or working directory")
+
+    try:
+        import imageio_ffmpeg
+
+        bundled = imageio_ffmpeg.get_ffmpeg_exe()
+        if bundled and os.path.isfile(bundled) and _is_ffmpeg_runnable(bundled):
+            return bundled
+    except Exception:
+        pass
+
+    raise AsrProcessingError("ffmpeg_missing", "no runnable ffmpeg found in env/path/local/imageio fallback")
 
 
 def _load_audio_via_ffmpeg(file_path: str) -> np.ndarray:
-    """Use the ffmpeg CLI to decode any audio file into a 16 kHz mono
-    float32 numpy array."""
     ffmpeg_bin = _find_ffmpeg()
     cmd = [
         ffmpeg_bin,
         "-nostdin",
-        "-threads", "0",
-        "-i", file_path,
-        "-f", "s16le",          # raw PCM signed 16-bit little-endian
-        "-ac", "1",             # mono
-        "-acodec", "pcm_s16le",
-        "-ar", str(_WHISPER_SAMPLE_RATE),
-        "-",                    # pipe to stdout
+        "-threads",
+        "0",
+        "-i",
+        file_path,
+        "-f",
+        "s16le",
+        "-ac",
+        "1",
+        "-acodec",
+        "pcm_s16le",
+        "-ar",
+        str(_WHISPER_SAMPLE_RATE),
+        "-",
     ]
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            timeout=30,
-        )
+        proc = subprocess.run(cmd, capture_output=True, timeout=30)
     except FileNotFoundError:
         raise AsrProcessingError("ffmpeg_missing", "ffmpeg binary not found when executing subprocess")
     except subprocess.TimeoutExpired:
         raise AsrProcessingError("decode_failed", "ffmpeg decode timed out after 30 seconds")
 
     if proc.returncode != 0:
+        if proc.returncode in (3221225781, -1073741515):
+            raise AsrProcessingError(
+                "missing_dependency",
+                "ffmpeg executable failed to start (missing runtime DLL dependency, rc=0xC0000135)",
+            )
         stderr_text = proc.stderr.decode("utf-8", errors="replace").strip()
         raise AsrProcessingError("decode_failed", f"ffmpeg decode failed (rc={proc.returncode}): {stderr_text[-500:]}")
 
     raw_bytes = proc.stdout
     if len(raw_bytes) == 0:
-        raise AsrProcessingError("decode_failed", "ffmpeg produced empty output — audio may be silent or corrupt")
+        raise AsrProcessingError("decode_failed", "ffmpeg produced empty output; audio may be silent or corrupt")
 
-    # Convert s16le bytes → float32 array normalised to [-1.0, 1.0].
-    audio = np.frombuffer(raw_bytes, np.int16).astype(np.float32) / 32768.0
-    return audio
+    return np.frombuffer(raw_bytes, np.int16).astype(np.float32) / 32768.0
 
 
 class FasterWhisperAdapter:
@@ -87,7 +115,7 @@ class FasterWhisperAdapter:
     async def transcribe(self, payload: TranscriptionInput) -> AdapterTranscriptionResult:
         return await asyncio.to_thread(self._transcribe_sync, payload)
 
-    def _get_model(self) -> Any:
+    def _get_model(self) -> tuple[Any, bool]:
         model_key = (
             settings.faster_whisper_model,
             settings.faster_whisper_device,
@@ -95,7 +123,7 @@ class FasterWhisperAdapter:
         )
         with self._model_lock:
             if self._model is not None and self._model_key == model_key:
-                return self._model
+                return self._model, True
             try:
                 from faster_whisper import WhisperModel
             except Exception as exc:
@@ -109,33 +137,49 @@ class FasterWhisperAdapter:
                 self._model_key = model_key
             except Exception as exc:
                 raise AsrProcessingError("model_load_failed", f"faster-whisper model init failed: {exc}") from exc
-            return self._model
+            return self._model, False
 
     def _transcribe_sync(self, payload: TranscriptionInput) -> AdapterTranscriptionResult:
         if len(payload.audio_bytes) == 0:
             return AdapterTranscriptionResult(
                 transcription=TranscriptionData(raw_text="", segments=[], engine=self.engine, latency_ms=1),
                 decode_ms=0,
-                asr_ms=0,
+                asr_ms=1,
+                audio_duration_ms=0,
+                model_cached=False,
                 model=settings.faster_whisper_model,
             )
 
-        model = self._get_model()
-        started_at = time.perf_counter()
+        model, model_cached = self._get_model()
         tmp_path = ""
         try:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp_file:
                 tmp_file.write(payload.audio_bytes)
                 tmp_path = tmp_file.name
 
-            # Decode via ffmpeg subprocess
             decode_start = time.perf_counter()
             audio_array = _load_audio_via_ffmpeg(tmp_path)
-            decode_ms = max(int((time.perf_counter() - decode_start) * 1000), 0)
+            decode_ms = max(int((time.perf_counter() - decode_start) * 1000), 1)
+            audio_duration_ms = int((len(audio_array) / _WHISPER_SAMPLE_RATE) * 1000)
+            max_duration_ms = int(settings.max_recording_seconds * 1000)
+            if audio_duration_ms > max_duration_ms:
+                raise AsrProcessingError(
+                    "audio_too_long",
+                    "Audio duration exceeds configured limit.",
+                    details={
+                        "audio_duration_ms": audio_duration_ms,
+                        "max_recording_seconds": settings.max_recording_seconds,
+                    },
+                )
 
-            # Feed the numpy array directly to faster-whisper.
             asr_start = time.perf_counter()
-            segments_iter, _ = model.transcribe(audio_array, language=payload.language)
+            segments_iter, _ = model.transcribe(
+                audio_array,
+                language=payload.language,
+                initial_prompt="这是一段包含普通话和英文混合的会议记录，请使用简体中文输出。Hello and welcome."
+            )
+            asr_ms = max(int((time.perf_counter() - asr_start) * 1000), 1)
+
             segments: list[Segment] = []
             text_parts: list[str] = []
             for seg in segments_iter:
@@ -151,26 +195,24 @@ class FasterWhisperAdapter:
                     text_parts.append(seg_text)
 
             raw_text = " ".join(text_parts).strip()
-            asr_ms = max(int((time.perf_counter() - asr_start) * 1000), 0)
-            
-            latency_ms = max(int((time.perf_counter() - started_at) * 1000), 1)
             transcription = TranscriptionData(
                 raw_text=raw_text,
                 segments=segments,
                 engine=self.engine,
-                latency_ms=latency_ms,
+                latency_ms=decode_ms + asr_ms,
             )
             return AdapterTranscriptionResult(
                 transcription=transcription,
                 decode_ms=decode_ms,
                 asr_ms=asr_ms,
+                audio_duration_ms=audio_duration_ms,
+                model_cached=model_cached,
                 model=settings.faster_whisper_model,
             )
         except AsrProcessingError:
             raise
         except Exception as exc:
-            error_text = str(exc)
-            raise AsrProcessingError("decode_failed", f"faster-whisper transcription failed: {error_text}") from exc
+            raise AsrProcessingError("decode_failed", f"faster-whisper transcription failed: {exc}") from exc
         finally:
             if tmp_path and os.path.exists(tmp_path):
                 try:

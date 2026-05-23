@@ -58,8 +58,12 @@ export function useWebSocket() {
       audioStream.getTracks().forEach(track => track.stop());
       audioStream = null;
     }
+    if (socket) {
+      socket.onclose = null; // Prevent onclose from triggering error if intentional
+      socket.close();
+      socket = null;
+    }
     mediaRecorder = null;
-    socket = null;
   };
 
   const startRecording = async (onDoneCallback) => {
@@ -179,7 +183,12 @@ export function useWebSocket() {
     }
   };
 
-  const stopRecording = () => {
+  const stopRecording = (abort = false) => {
+    if (abort) {
+      cleanup();
+      setState('idle');
+      return;
+    }
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
       mediaRecorder.stop();
     }

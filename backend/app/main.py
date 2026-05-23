@@ -71,11 +71,14 @@ def append_history_item(
 
 def asr_error_details(exc: Exception) -> dict[str, Any]:
     if isinstance(exc, AsrProcessingError):
-        return {
+        details = {
             "engine": settings.asr_engine.value,
             "reason": exc.reason,
             "reason_detail": exc.message,
         }
+        if exc.details:
+            details.update(exc.details)
+        return details
     return {
         "engine": settings.asr_engine.value,
         "reason": "unknown_error",
@@ -333,6 +336,55 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                         )
                     )
                     transcription = adapter_output.transcription
+                except AsrProcessingError as exc:
+                    details = asr_error_details(exc)
+                    if exc.reason == "audio_too_long":
+                        append_history_item(
+                            raw_text="",
+                            final_text="",
+                            engine=settings.asr_engine.value,
+                            latency_ms=0,
+                            success=False,
+                            error_code=ErrorCode.CONFIG_ERROR.value,
+                        )
+                        await websocket.send_json(
+                            {
+                                "type": "transcription_result",
+                                "result": error_result(
+                                    ErrorCode.CONFIG_ERROR,
+                                    "Audio duration exceeds configured limit.",
+                                    details=details,
+                                ).model_dump(),
+                            }
+                        )
+                        await websocket.close()
+                        return
+                    logger.error(
+                        "ASR processing failed: engine=%s reason=%s detail=%s",
+                        details.get("engine"),
+                        details.get("reason"),
+                        details.get("reason_detail"),
+                    )
+                    append_history_item(
+                        raw_text="",
+                        final_text="",
+                        engine=settings.asr_engine.value,
+                        latency_ms=0,
+                        success=False,
+                        error_code=ErrorCode.ASR_ENGINE_ERROR.value,
+                    )
+                    await websocket.send_json(
+                        {
+                            "type": "transcription_result",
+                            "result": error_result(
+                                ErrorCode.ASR_ENGINE_ERROR,
+                                "ASR processing failed.",
+                                details=details,
+                            ).model_dump(),
+                        }
+                    )
+                    await websocket.close()
+                    return
                 except NotImplementedError as exc:
                     append_history_item(
                         raw_text="",
@@ -391,6 +443,8 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                         "bytes_received": len(audio_buffer),
                         "decode_ms": adapter_output.decode_ms,
                         "asr_ms": adapter_output.asr_ms,
+                        "audio_duration_ms": adapter_output.audio_duration_ms,
+                        "model_cached": adapter_output.model_cached,
                     },
                 )
                 postprocess_started = time.perf_counter()
