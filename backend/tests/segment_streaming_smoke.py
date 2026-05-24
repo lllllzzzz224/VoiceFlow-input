@@ -47,11 +47,19 @@ def _run_enabled_mock_path(client: TestClient) -> None:
     asr_service._ADAPTERS.clear()
     try:
         with client.websocket_connect("/ws/transcribe") as ws:
-            ws.send_json({"type": "start", "streaming_mode": "segment", "language": "zh"})
+            ws.send_json(
+                {
+                    "type": "start",
+                    "streaming_mode": "segment",
+                    "language": "zh",
+                    "asr_mode": "accurate",
+                }
+            )
             ack = ws.receive_json()
             assert ack["type"] == "ack"
             assert ack["result"]["success"] is True
             assert ack["result"]["data"]["streaming_mode"] == "segment"
+            assert ack["result"]["data"]["asr_mode"] == "accurate"
 
             seg1 = base64.b64encode(b"segment-one").decode("ascii")
             ws.send_json(
@@ -77,6 +85,8 @@ def _run_enabled_mock_path(client: TestClient) -> None:
             assert "postprocess_ms" in partial_meta
             assert "total_ms" in partial_meta
             assert "audio_quality" in partial_meta
+            assert partial_meta["asr_mode"] == "accurate"
+            assert partial_meta["model"] == settings.asr_accurate_model
 
             ws.send_json({"type": "end"})
             final_msg = ws.receive_json()
@@ -85,6 +95,8 @@ def _run_enabled_mock_path(client: TestClient) -> None:
             assert final_result["success"] is True
             assert isinstance(final_result["data"]["final_text"], str)
             assert final_result["data"]["engine"] == "mock"
+            assert final_result["meta"]["asr_mode"] == "accurate"
+            assert final_result["meta"]["model"] == settings.asr_accurate_model
             assert "decode_ms" in final_result["meta"]
             assert "asr_ms" in final_result["meta"]
             assert "postprocess_ms" in final_result["meta"]

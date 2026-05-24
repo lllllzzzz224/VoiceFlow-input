@@ -10,6 +10,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from app.contracts import AsrEngine
 from app.adapters.faster_whisper import AsrProcessingError, FasterWhisperAdapter
+from app.adapters.base import TranscriptionInput
 from app.main import app
 from app.settings import settings
 
@@ -28,6 +29,8 @@ def run_health_check(client: TestClient) -> None:
     assert_standard_result_shape(payload)
     assert payload["success"] is True
     assert payload["data"]["status"] == "ok"
+    assert payload["meta"]["asr_modes"]["fast"] == settings.asr_fast_model
+    assert payload["meta"]["asr_modes"]["accurate"] == settings.asr_accurate_model
 
 
 def run_ws_happy_path(client: TestClient) -> None:
@@ -66,7 +69,72 @@ def run_ws_happy_path(client: TestClient) -> None:
         assert "audio_duration_ms" in result["meta"]
         assert "model_cached" in result["meta"]
         assert "model" in result["meta"]
+        assert result["meta"]["asr_mode"] == "fast"
+        assert "hotwords_enabled" in result["meta"]
+        assert "hotwords_count" in result["meta"]
         assert result["meta"]["cost_cents"] == 0
+
+
+def run_ws_accurate_mode(client: TestClient) -> None:
+    with client.websocket_connect("/ws/transcribe") as websocket:
+        websocket.send_json(
+            {
+                "type": "start",
+                "sample_rate": 16000,
+                "channels": 1,
+                "language": "zh",
+                "asr_mode": "accurate",
+            }
+        )
+        ack = websocket.receive_json()
+        assert ack["type"] == "ack"
+        assert ack["result"]["success"] is True
+        assert ack["result"]["data"]["asr_mode"] == "accurate"
+
+        websocket.send_bytes(b"voice")
+        websocket.send_json({"type": "end"})
+        final_msg = websocket.receive_json()
+        result = final_msg["result"]
+        assert result["success"] is True
+        assert result["meta"]["asr_mode"] == "accurate"
+        assert result["meta"]["model"] == settings.asr_accurate_model
+
+
+def run_faster_whisper_model_resolver() -> None:
+    adapter = FasterWhisperAdapter()
+
+    model, mode = adapter._resolve_model_name(
+        TranscriptionInput(audio_bytes=b"x", asr_mode="fast", asr_mode_provided=True)
+    )
+    assert model == settings.asr_fast_model
+    assert mode == "fast"
+
+    model, mode = adapter._resolve_model_name(
+        TranscriptionInput(audio_bytes=b"x", asr_mode="accurate", asr_mode_provided=True)
+    )
+    assert model == settings.asr_accurate_model
+    assert mode == "accurate"
+
+
+def run_hotwords_config_behavior(client: TestClient) -> None:
+    original_asr_hotwords = list(settings.asr_hotwords)
+    try:
+        settings.asr_hotwords = ["FastAPI", "WebSocket", "GitHub"]
+        prompt = settings.build_initial_prompt([])
+        assert isinstance(prompt, str) and "FastAPI" in prompt and "WebSocket" in prompt and "GitHub" in prompt
+        with client.websocket_connect("/ws/transcribe") as websocket:
+            websocket.send_json({"type": "start", "sample_rate": 16000, "channels": 1, "language": "zh"})
+            _ = websocket.receive_json()
+            websocket.send_bytes(b"voice")
+            websocket.send_json({"type": "end"})
+            final_msg = websocket.receive_json()
+            assert final_msg["type"] == "transcription_result"
+            result = final_msg["result"]
+            assert result["success"] is True
+            assert result["meta"]["hotwords_enabled"] is True
+            assert result["meta"]["hotwords_count"] == 3
+    finally:
+        settings.asr_hotwords = original_asr_hotwords
 
 
 def run_ws_no_speech(client: TestClient) -> None:
@@ -120,7 +188,7 @@ def run_ws_error_adapter_failure(client: TestClient) -> None:
     previous_engine = settings.asr_engine
     original_get_model = FasterWhisperAdapter._get_model
 
-    def _raise_model_error(self: FasterWhisperAdapter):  # type: ignore[no-untyped-def]
+    def _raise_model_error(self: FasterWhisperAdapter, _payload):  # type: ignore[no-untyped-def]
         raise AsrProcessingError("model_load_failed", "forced model init failure")
 
     FasterWhisperAdapter._get_model = _raise_model_error  # type: ignore[assignment]
@@ -166,8 +234,8 @@ def run_ws_error_audio_too_long(client: TestClient) -> None:
         def transcribe(self, *_args, **_kwargs):  # type: ignore[no-untyped-def]
             return iter([]), None
 
-    def _fake_get_model(self: FasterWhisperAdapter):  # type: ignore[no-untyped-def]
-        return _FakeModel(), True
+    def _fake_get_model(self: FasterWhisperAdapter, _payload):  # type: ignore[no-untyped-def]
+        return _FakeModel(), True, settings.asr_fast_model, "fast"
 
     def _raise_too_long(self: FasterWhisperAdapter, _payload):  # type: ignore[no-untyped-def]
         raise AsrProcessingError(
@@ -197,9 +265,12 @@ def run_ws_error_audio_too_long(client: TestClient) -> None:
 
 
 def main() -> None:
+    run_faster_whisper_model_resolver()
     with TestClient(app) as client:
         run_health_check(client)
         run_ws_happy_path(client)
+        run_hotwords_config_behavior(client)
+        run_ws_accurate_mode(client)
         run_ws_no_speech(client)
         run_ws_error_base64(client)
         run_ws_error_invalid_json(client)

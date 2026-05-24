@@ -184,6 +184,7 @@ Rules:
   "sample_rate": 16000,
   "channels": 1,
   "language": "zh",
+  "asr_mode": "fast",
   "hotwords": ["七牛云", "Kodo", "MCP"]
 }
 ```
@@ -194,6 +195,7 @@ Rules:
 2. `sample_rate`, `channels`, `language` and `hotwords` are optional in the first mock flow but should remain stable extension points.
 3. API keys must not be sent from frontend.
 4. `streaming_mode` is optional. Default is full session mode. `streaming_mode=segment` is experimental and controlled by backend config.
+5. `asr_mode` is optional. Supported values are `fast` and `accurate`; missing or invalid values fallback to `fast`.
 
 ### Client Audio Chunk
 
@@ -321,6 +323,8 @@ Additional meta fields:
 - `postprocess_ms`
 - `total_ms`
 - `audio_duration_ms`
+- `asr_mode`
+- `model`
 - `model_cached`
 - `audio_quality`
 

@@ -13,6 +13,8 @@ class TranscriptionInput:
     channels: int = 1
     language: str | None = None
     hotwords: list[str] | None = None
+    asr_mode: str | None = None
+    asr_mode_provided: bool = False
 
 
 @dataclass
@@ -24,6 +26,7 @@ class AdapterTranscriptionResult:
     audio_quality: dict
     model_cached: bool
     model: str
+    asr_mode: str
 
 
 class AsrAdapter(Protocol):

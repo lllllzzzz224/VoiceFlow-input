@@ -7,6 +7,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from app import text_normalizer
 from app.postprocess import run_postprocess
+from app.settings import settings
 
 
 HOTWORDS = {
@@ -61,6 +62,25 @@ def test_case_correction_sentence() -> None:
     assert any(item.to_text == "FastAPI" for item in corrections)
 
 
+def test_asr_hotwords_merge_for_postprocess() -> None:
+    original_asr_hotwords = list(settings.asr_hotwords)
+    try:
+        settings.asr_hotwords = ["FastAPI", "WebSocket", "GitHub"]
+        hotword_map = settings.build_hotword_map_for_session([])
+        raw = "github websocket fastapi"
+        final_text, _corrections, warning = run_postprocess(
+            raw_text=raw,
+            hotword_map=hotword_map,
+            punctuation_enabled=True,
+            spacing_enabled=True,
+            simplified_chinese_enabled=True,
+        )
+        assert warning is None
+        assert final_text == "GitHub WebSocket FastAPI."
+    finally:
+        settings.asr_hotwords = original_asr_hotwords
+
+
 def test_opencc_and_custom_mapping_sentence() -> None:
     raw = "\u7232\u4e86\u6e2c\u8a66 OpenCC \u88cf\u9762\u7684\u8f49\u63db"
     final_text, _corrections, warning = run_postprocess(
@@ -101,6 +121,7 @@ def main() -> None:
     test_traditional_to_simplified()
     test_meeting_agent_sentence()
     test_case_correction_sentence()
+    test_asr_hotwords_merge_for_postprocess()
     test_opencc_and_custom_mapping_sentence()
     test_opencc_unavailable_fallback()
     print("postprocess_smoke: PASS")

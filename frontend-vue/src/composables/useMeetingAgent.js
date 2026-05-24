@@ -41,7 +41,7 @@ export function useMeetingAgent() {
 
       if (!data.success) {
         if (data.error && data.error.code === 'CONFIG_ERROR') {
-          summaryError.value = '会议纪要 Agent 未启用，请在后端配置 MiMo API key。';
+          summaryError.value = '会议纪要 Agent 未启用，请在后端配置 API key。';
         } else {
           summaryError.value = data.error ? data.error.message : '生成失败，请重试。';
         }
