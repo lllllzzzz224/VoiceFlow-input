@@ -1,6 +1,19 @@
 <template>
   <div class="home-hero">
     <div class="scene-container">
+      <!-- 左上角独立 Logo -->
+      <div class="top-left-logo" @click="$emit('enter-app')">lz</div>
+
+      <!-- 悬浮胶囊导航栏 -->
+      <nav class="floating-nav">
+        <div class="nav-links">
+          <a href="#" class="nav-link" @click.prevent="$emit('enter-app')">Product</a>
+          <a href="#" class="nav-link">Features</a>
+          <a href="#" class="nav-link">Documentation</a>
+        </div>
+        <button class="nav-btn" @click="$emit('enter-app')">Get Started</button>
+      </nav>
+
       <!-- 主视觉文案 -->
       <div class="hero-text">
         <h1 class="hero-title">
@@ -248,5 +261,95 @@ defineEmits(['enter-app'])
     .wave-bar, .node-button, .hero-text, .floating-icon {
         animation: none;
     }
+}
+
+/* 左上角 Logo 独立模块 */
+.top-left-logo {
+  position: absolute;
+  top: 36px;
+  left: 48px;
+  font-family: 'Inter', sans-serif;
+  font-weight: 800;
+  font-size: 1.5rem;
+  letter-spacing: -0.06em;
+  color: #111;
+  cursor: pointer;
+  user-select: none;
+  z-index: 1000;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+.top-left-logo:hover {
+  opacity: 0.7;
+}
+
+.top-left-logo:active {
+  transform: scale(0.95);
+}
+
+/* 导航栏样式 */
+.floating-nav {
+  position: absolute;
+  top: 32px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: max-content;
+  gap: 16px;
+  background: rgba(255, 255, 255, 0.5);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  border-radius: 100px;
+  padding: 8px 10px 8px 16px;
+  z-index: 1000;
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nav-link {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #555;
+  text-decoration: none;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  letter-spacing: 0.01em;
+  padding: 8px 16px;
+  border-radius: 100px;
+  background: transparent;
+}
+
+.nav-link:hover {
+  color: #111;
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.nav-btn {
+  background: #111;
+  color: #fff;
+  border: none;
+  border-radius: 100px;
+  padding: 10px 24px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.nav-btn:hover {
+  background: #222;
+  transform: scale(1.02);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.nav-btn:active {
+  transform: scale(0.98);
 }
 </style>
