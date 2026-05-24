@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 
 from app.adapters.base import AdapterTranscriptionResult, TranscriptionInput
+from app.audio_quality import analyze_audio_quality
 from app.contracts import AsrEngine, Segment, TranscriptionData
 from app.settings import settings
 
@@ -146,6 +147,16 @@ class FasterWhisperAdapter:
                 decode_ms=0,
                 asr_ms=1,
                 audio_duration_ms=0,
+                audio_quality={
+                    "audio_duration_ms": 0,
+                    "rms": 0.0,
+                    "peak": 0.0,
+                    "silence_ratio": 1.0,
+                    "too_short": True,
+                    "low_volume": True,
+                    "mostly_silent": True,
+                    "warnings": ["TOO_SHORT", "LOW_VOLUME", "MOSTLY_SILENT"],
+                },
                 model_cached=False,
                 model=settings.faster_whisper_model,
             )
@@ -160,6 +171,7 @@ class FasterWhisperAdapter:
             decode_start = time.perf_counter()
             audio_array = _load_audio_via_ffmpeg(tmp_path)
             decode_ms = max(int((time.perf_counter() - decode_start) * 1000), 1)
+            audio_quality = analyze_audio_quality(audio_array, sample_rate=_WHISPER_SAMPLE_RATE)
             audio_duration_ms = int((len(audio_array) / _WHISPER_SAMPLE_RATE) * 1000)
             max_duration_ms = int(settings.max_recording_seconds * 1000)
             if audio_duration_ms > max_duration_ms:
@@ -177,7 +189,8 @@ class FasterWhisperAdapter:
                 "language": payload.language or settings.default_language,
                 "beam_size": settings.faster_whisper_beam_size,
                 "vad_filter": settings.faster_whisper_vad_filter,
-                "condition_on_previous_text": False,
+                "condition_on_previous_text": settings.faster_whisper_condition_on_previous_text,
+                "temperature": settings.faster_whisper_temperature,
             }
             if settings.asr_initial_prompt:
                 transcribe_kwargs["initial_prompt"] = settings.asr_initial_prompt
@@ -199,6 +212,12 @@ class FasterWhisperAdapter:
                     text_parts.append(seg_text)
 
             raw_text = " ".join(text_parts).strip()
+            if not raw_text and (audio_quality["too_short"] or audio_quality["mostly_silent"]):
+                raise AsrProcessingError(
+                    "no_speech_detected",
+                    "No speech detected from audio.",
+                    details={"audio_quality": audio_quality},
+                )
             transcription = TranscriptionData(
                 raw_text=raw_text,
                 segments=segments,
@@ -210,6 +229,7 @@ class FasterWhisperAdapter:
                 decode_ms=decode_ms,
                 asr_ms=asr_ms,
                 audio_duration_ms=audio_duration_ms,
+                audio_quality=audio_quality,
                 model_cached=model_cached,
                 model=settings.faster_whisper_model,
             )

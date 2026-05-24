@@ -21,6 +21,7 @@ class AdapterTranscriptionResult:
     decode_ms: int
     asr_ms: int
     audio_duration_ms: int
+    audio_quality: dict
     model_cached: bool
     model: str
 
