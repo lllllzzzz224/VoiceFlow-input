@@ -25,6 +25,12 @@ export function useWebSocket() {
   const isConnError = ref(false);
   const recordingTime = ref(0);
 
+  // ASR mode state
+  const selectedAsrMode = ref('fast');
+  const backendAsrMode = ref('');
+  const backendAsrModel = ref('');
+  const backendModelCached = ref(null);
+
   // Segment streaming state
   const segmentStreamingEnabled = ref(false);
   const isSegmentMode = ref(false);
@@ -169,7 +175,8 @@ export function useWebSocket() {
           format: "webm",
           sample_rate: 16000,
           channels: 1,
-          language: "zh"
+          language: "zh",
+          asr_mode: selectedAsrMode.value
         };
         
         if (isSegmentMode.value) {
@@ -224,6 +231,11 @@ export function useWebSocket() {
                if (res.result.data.latency_ms) {
                  latencyInfo.value = `片段延迟: ${res.result.data.latency_ms}ms`;
                }
+               
+               const meta = res.result.meta || {};
+               backendAsrMode.value = meta.asr_mode || selectedAsrMode.value;
+               backendAsrModel.value = meta.model || '';
+               backendModelCached.value = meta.model_cached ?? null;
             }
           } else if (res.type === 'partial_error') {
             if (onToastCallback) onToastCallback('某个片段识别失败，已继续录音');
@@ -246,6 +258,10 @@ export function useWebSocket() {
               warningText.value = res.result.data.warning || '';
               
               const meta = res.result.meta || {};
+              backendAsrMode.value = meta.asr_mode || selectedAsrMode.value;
+              backendAsrModel.value = meta.model || '';
+              backendModelCached.value = meta.model_cached ?? null;
+              
               const data = res.result.data || {};
               
               let times = [];
@@ -358,6 +374,10 @@ export function useWebSocket() {
     isConnected,
     isConnError,
     recordingTime,
+    selectedAsrMode,
+    backendAsrMode,
+    backendAsrModel,
+    backendModelCached,
     segmentStreamingEnabled,
     startRecording,
     stopRecording

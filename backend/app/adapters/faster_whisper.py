@@ -109,36 +109,51 @@ def _load_audio_via_ffmpeg(file_path: str) -> np.ndarray:
 
 class FasterWhisperAdapter:
     engine = AsrEngine.FASTER_WHISPER
-    _model: Any = None
-    _model_key: tuple[str, str, str] | None = None
+    _model_cache: dict[tuple[str, str, str], Any] = {}
     _model_lock = threading.Lock()
 
     async def transcribe(self, payload: TranscriptionInput) -> AdapterTranscriptionResult:
         return await asyncio.to_thread(self._transcribe_sync, payload)
 
-    def _get_model(self) -> tuple[Any, bool]:
+    def _normalize_asr_mode(self, asr_mode: str | None) -> str:
+        return "accurate" if (asr_mode or "").strip().lower() == "accurate" else "fast"
+
+    def _resolve_model_name(self, payload: TranscriptionInput) -> tuple[str, str]:
+        resolved_mode = self._normalize_asr_mode(payload.asr_mode)
+        if payload.asr_mode_provided:
+            if resolved_mode == "accurate":
+                return settings.asr_accurate_model, resolved_mode
+            return settings.asr_fast_model, resolved_mode
+
+        if settings.faster_whisper_model_explicitly_set:
+            return settings.faster_whisper_model, resolved_mode
+        return settings.asr_fast_model, resolved_mode
+
+    def _get_model(self, payload: TranscriptionInput) -> tuple[Any, bool, str, str]:
+        model_name, resolved_mode = self._resolve_model_name(payload)
         model_key = (
-            settings.faster_whisper_model,
+            model_name,
             settings.faster_whisper_device,
             settings.faster_whisper_compute_type,
         )
         with self._model_lock:
-            if self._model is not None and self._model_key == model_key:
-                return self._model, True
+            cached_model = self._model_cache.get(model_key)
+            if cached_model is not None:
+                return cached_model, True, model_name, resolved_mode
             try:
                 from faster_whisper import WhisperModel
             except Exception as exc:
                 raise AsrProcessingError("missing_dependency", f"faster-whisper import failed: {exc}") from exc
             try:
-                self._model = WhisperModel(
-                    settings.faster_whisper_model,
+                model = WhisperModel(
+                    model_name,
                     device=settings.faster_whisper_device,
                     compute_type=settings.faster_whisper_compute_type,
                 )
-                self._model_key = model_key
+                self._model_cache[model_key] = model
             except Exception as exc:
                 raise AsrProcessingError("model_load_failed", f"faster-whisper model init failed: {exc}") from exc
-            return self._model, False
+            return model, False, model_name, resolved_mode
 
     def _transcribe_sync(self, payload: TranscriptionInput) -> AdapterTranscriptionResult:
         if len(payload.audio_bytes) == 0:
@@ -158,10 +173,11 @@ class FasterWhisperAdapter:
                     "warnings": ["TOO_SHORT", "LOW_VOLUME", "MOSTLY_SILENT"],
                 },
                 model_cached=False,
-                model=settings.faster_whisper_model,
+                model=settings.asr_fast_model,
+                asr_mode="fast",
             )
 
-        model, model_cached = self._get_model()
+        model, model_cached, model_name, resolved_mode = self._get_model(payload)
         tmp_path = ""
         try:
             with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp_file:
@@ -192,8 +208,9 @@ class FasterWhisperAdapter:
                 "condition_on_previous_text": settings.faster_whisper_condition_on_previous_text,
                 "temperature": settings.faster_whisper_temperature,
             }
-            if settings.asr_initial_prompt:
-                transcribe_kwargs["initial_prompt"] = settings.asr_initial_prompt
+            initial_prompt = settings.build_initial_prompt(payload.hotwords)
+            if initial_prompt:
+                transcribe_kwargs["initial_prompt"] = initial_prompt
             segments_iter, _ = model.transcribe(audio_array, **transcribe_kwargs)
             asr_ms = max(int((time.perf_counter() - asr_start) * 1000), 1)
 
@@ -231,7 +248,8 @@ class FasterWhisperAdapter:
                 audio_duration_ms=audio_duration_ms,
                 audio_quality=audio_quality,
                 model_cached=model_cached,
-                model=settings.faster_whisper_model,
+                model=model_name,
+                asr_mode=resolved_mode,
             )
         except AsrProcessingError:
             raise

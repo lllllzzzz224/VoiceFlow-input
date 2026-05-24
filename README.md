@@ -10,7 +10,7 @@ Current backend supports:
 - `WS /ws/transcribe` (mock + faster-whisper)
 - `GET /history`, `DELETE /history`
 - `GET /export/markdown`
-- optional `POST /ai/meeting-summary` (Xiaomi MiMo text-only summary)
+- optional `POST /ai/meeting-summary` (default DeepSeek provider with local fallback)
 
 ## Quick Start
 

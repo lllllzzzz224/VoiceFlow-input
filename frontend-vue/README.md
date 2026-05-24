@@ -8,6 +8,7 @@ This is the Vue 3 frontend application for the VoiceFlow Input project. It provi
 - **Segment Streaming (Experimental)**: Optional toggle to send 2.5s chunks of audio sequentially for real-time partial text updates.
 - **Meeting Minutes Agent**: Integrated with the backend AI summary generation.
 - **History & Markdown Export**: Easy access to previous transcriptions and seamless markdown exports.
+- **Fast / Accurate ASR Modes**: Frontend supports selecting between `fast` (base model) and `accurate` (small model). The mode is sent via WebSocket start messages. Note: the first use of the accurate mode may take longer as the backend lazy-loads the model. The frontend strictly delegates model management to the backend (no model saving, no API keys, no env modifications).
 
 ## Project Setup
 

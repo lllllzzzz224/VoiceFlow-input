@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from app.adapters.base import TranscriptionInput
+from app.adapters.deepseek_summary import DeepSeekMeetingSummaryProvider
 from app.adapters.faster_whisper import AsrProcessingError
 from app.adapters.xiaomi_mimo import MeetingSummaryProviderError, XiaomiMimoMeetingSummaryProvider
 from app.asr_service import get_asr_adapter
@@ -31,13 +32,49 @@ app.add_middleware(
     allow_headers=["Content-Type"],
 )
 logger = logging.getLogger("voiceflow.backend")
-meeting_summary_provider = XiaomiMimoMeetingSummaryProvider()
+xiaomi_meeting_summary_provider = XiaomiMimoMeetingSummaryProvider()
+deepseek_meeting_summary_provider = DeepSeekMeetingSummaryProvider()
 
 
 class MeetingSummaryRequest(BaseModel):
     transcript: str
     mode: str = "minutes"
     include_original: bool = True
+
+
+def build_local_meeting_summary(transcript: str) -> str:
+    trimmed = transcript.strip()
+    clipped = trimmed if len(trimmed) <= 1200 else f"{trimmed[:1200]}\n...(truncated)"
+    return (
+        "# \u4f1a\u8bae\u7eaa\u8981\n\n"
+        "## \u4f1a\u8bae\u6458\u8981\n"
+        "- \u57fa\u4e8e\u5f53\u524d\u8f6c\u5199\u6587\u672c\u751f\u6210\u7684\u672c\u5730\u7eaa\u8981\u8349\u7a3f\u3002\n\n"
+        "## \u5173\u952e\u7ed3\u8bba\n"
+        "- \u672a\u63d0\u53ca\n\n"
+        "## \u5f85\u529e\u4e8b\u9879\n"
+        "- \u672a\u63d0\u53ca\n\n"
+        "## \u98ce\u9669\u70b9\n"
+        "- \u672a\u63d0\u53ca\n\n"
+        "## \u539f\u59cb\u8981\u70b9\n"
+        f"{clipped}\n"
+    )
+
+
+def _get_meeting_summary_provider() -> tuple[str, str, Any]:
+    provider_name = settings.meeting_summary_provider
+    if provider_name == "xiaomi":
+        return provider_name, settings.xiaomi_model, xiaomi_meeting_summary_provider
+    if provider_name == "deepseek":
+        return provider_name, settings.deepseek_model, deepseek_meeting_summary_provider
+    return "local", "local-template-v1", None
+
+
+def _provider_key_available(provider_name: str) -> bool:
+    if provider_name == "deepseek":
+        return bool(settings.deepseek_api_key)
+    if provider_name == "xiaomi":
+        return bool(settings.xiaomi_api_key)
+    return True
 
 
 def now_iso() -> str:
@@ -191,7 +228,12 @@ def build_history_markdown(items: list[dict[str, Any]], total_count: int, succes
 async def health() -> dict[str, Any]:
     result = ok_result(
         data={"status": "ok", "service": "voiceflow-input-backend"},
-        meta={"asr_engine": settings.asr_engine.value, "version": "0.1.0", "time": now_iso()},
+        meta={
+            "asr_engine": settings.asr_engine.value,
+            "asr_modes": {"fast": settings.asr_fast_model, "accurate": settings.asr_accurate_model},
+            "version": "0.1.0",
+            "time": now_iso(),
+        },
     )
     return result.model_dump()
 
@@ -251,11 +293,6 @@ async def meeting_summary(payload: MeetingSummaryRequest) -> dict[str, Any]:
         result.meta = {"ai_enabled": False, "ai_used": False}
         return result.model_dump()
 
-    if not settings.xiaomi_api_key:
-        result = error_result(ErrorCode.CONFIG_ERROR, "AI meeting summary is not configured.")
-        result.meta = {"ai_enabled": False, "ai_used": False}
-        return result.model_dump()
-
     if payload.mode != "minutes":
         result = error_result(ErrorCode.VALIDATION_ERROR, "Only mode=minutes is supported.")
         result.meta = {"ai_enabled": True, "ai_used": False}
@@ -266,8 +303,49 @@ async def meeting_summary(payload: MeetingSummaryRequest) -> dict[str, Any]:
         result.meta = {"ai_enabled": True, "ai_used": False}
         return result.model_dump()
 
+    provider_name, provider_model, provider = _get_meeting_summary_provider()
+
+    if provider_name == "local":
+        latency_ms = max(int((time.perf_counter() - started) * 1000), 1)
+        result = ok_result(
+            data={
+                "summary_markdown": build_local_meeting_summary(transcript),
+                "provider": "local_fallback",
+                "model": "local-template-v1",
+                "mode": payload.mode,
+            },
+            meta={
+                "latency_ms": latency_ms,
+                "ai_enabled": True,
+                "ai_used": False,
+                "provider_fallback": True,
+                "fallback_reason": "provider_local_mode",
+            },
+        )
+        return result.model_dump()
+
+    if not _provider_key_available(provider_name):
+        latency_ms = max(int((time.perf_counter() - started) * 1000), 1)
+        result = ok_result(
+            data={
+                "summary_markdown": build_local_meeting_summary(transcript),
+                "provider": "local_fallback",
+                "model": "local-template-v1",
+                "mode": payload.mode,
+            },
+            meta={
+                "latency_ms": latency_ms,
+                "ai_enabled": True,
+                "ai_used": False,
+                "provider_fallback": True,
+                "fallback_reason": "provider_key_missing",
+                "provider_error_code": "CONFIG_ERROR",
+            },
+        )
+        return result.model_dump()
+
     try:
-        summary_markdown = await meeting_summary_provider.summarize(
+        summary_markdown = await provider.summarize(
             transcript=transcript,
             mode=payload.mode,
             include_original=payload.include_original,
@@ -275,8 +353,8 @@ async def meeting_summary(payload: MeetingSummaryRequest) -> dict[str, Any]:
         latency_ms = max(int((time.perf_counter() - started) * 1000), 1)
         logger.info(
             "meeting_summary provider=%s model=%s success=%s latency_ms=%s transcript_length=%s",
-            meeting_summary_provider.provider,
-            settings.xiaomi_model,
+            provider_name,
+            provider_model,
             True,
             latency_ms,
             transcript_length,
@@ -284,42 +362,71 @@ async def meeting_summary(payload: MeetingSummaryRequest) -> dict[str, Any]:
         result = ok_result(
             data={
                 "summary_markdown": summary_markdown,
-                "provider": meeting_summary_provider.provider,
-                "model": settings.xiaomi_model,
+                "provider": provider_name,
+                "model": provider_model,
                 "mode": payload.mode,
             },
             meta={
                 "latency_ms": latency_ms,
                 "ai_enabled": True,
                 "ai_used": True,
+                "provider_fallback": False,
             },
         )
         return result.model_dump()
-    except MeetingSummaryProviderError:
+    except MeetingSummaryProviderError as exc:
         latency_ms = max(int((time.perf_counter() - started) * 1000), 1)
         logger.error(
             "meeting_summary provider=%s model=%s success=%s latency_ms=%s transcript_length=%s",
-            meeting_summary_provider.provider,
-            settings.xiaomi_model,
+            provider_name,
+            provider_model,
             False,
             latency_ms,
             transcript_length,
         )
-        result = error_result(ErrorCode.AI_PROVIDER_ERROR, "AI meeting summary generation failed.")
-        result.meta = {"latency_ms": latency_ms, "ai_enabled": True, "ai_used": True}
+        result = ok_result(
+            data={
+                "summary_markdown": build_local_meeting_summary(transcript),
+                "provider": "local_fallback",
+                "model": "local-template-v1",
+                "mode": payload.mode,
+            },
+            meta={
+                "latency_ms": latency_ms,
+                "ai_enabled": True,
+                "ai_used": True,
+                "provider_fallback": True,
+                "fallback_reason": "provider_request_failed",
+                "provider_error_code": exc.reason,
+            },
+        )
         return result.model_dump()
     except Exception:
         latency_ms = max(int((time.perf_counter() - started) * 1000), 1)
         logger.error(
             "meeting_summary provider=%s model=%s success=%s latency_ms=%s transcript_length=%s",
-            meeting_summary_provider.provider,
-            settings.xiaomi_model,
+            provider_name,
+            provider_model,
             False,
             latency_ms,
             transcript_length,
         )
-        result = error_result(ErrorCode.AI_PROVIDER_ERROR, "AI meeting summary generation failed.")
-        result.meta = {"latency_ms": latency_ms, "ai_enabled": True, "ai_used": True}
+        result = ok_result(
+            data={
+                "summary_markdown": build_local_meeting_summary(transcript),
+                "provider": "local_fallback",
+                "model": "local-template-v1",
+                "mode": payload.mode,
+            },
+            meta={
+                "latency_ms": latency_ms,
+                "ai_enabled": True,
+                "ai_used": True,
+                "provider_fallback": True,
+                "fallback_reason": "provider_unknown_error",
+                "provider_error_code": "request_failed",
+            },
+        )
         return result.model_dump()
 
 
@@ -330,7 +437,11 @@ async def ws_transcribe(websocket: WebSocket) -> None:
     sample_rate = 16000
     channels = 1
     language: str = settings.default_language
+    asr_mode = "fast"
+    asr_mode_provided = False
+    asr_mode_fallback = False
     hotwords: list[str] = []
+    session_hotword_map = settings.build_hotword_map_for_session([])
     audio_buffer = bytearray()
     streaming_mode = "full"
     partial_state = TranscriptState()
@@ -341,6 +452,8 @@ async def ws_transcribe(websocket: WebSocket) -> None:
     segment_total_postprocess_ms = 0
     segment_total_ms = 0
     last_audio_quality: dict[str, Any] | None = None
+    last_model_name: str | None = None
+    last_model_cached: bool = False
 
     async def fail_audio_too_large() -> None:
         append_history_item(
@@ -375,7 +488,9 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                     sample_rate=sample_rate,
                     channels=channels,
                     language=language,
-                    hotwords=hotwords,
+                    hotwords=settings.get_effective_hotwords(hotwords),
+                    asr_mode=asr_mode,
+                    asr_mode_provided=asr_mode_provided,
                 )
             )
             transcription = adapter_output.transcription
@@ -400,12 +515,15 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                 "audio_duration_ms": adapter_output.audio_duration_ms,
                 "model_cached": adapter_output.model_cached,
                 "audio_quality": adapter_output.audio_quality,
+                "asr_mode": adapter_output.asr_mode,
+                "hotwords_enabled": settings.hotwords_enabled,
+                "hotwords_count": settings.hotwords_count,
             },
         )
         postprocess_started = time.perf_counter()
         final_text, corrections, post_warning = run_postprocess(
             raw_text=transcription.raw_text,
-            hotword_map=settings.hotword_map,
+            hotword_map=session_hotword_map,
             punctuation_enabled=settings.postprocess_punctuation_enabled,
             spacing_enabled=settings.postprocess_spacing_enabled,
             simplified_chinese_enabled=settings.postprocess_simplified_chinese_enabled,
@@ -416,6 +534,8 @@ async def ws_transcribe(websocket: WebSocket) -> None:
         result.meta["postprocess_ms"] = postprocess_ms
         result.meta["total_ms"] = total_ms
         result.meta["time"] = now_iso()
+        if asr_mode_fallback:
+            result.meta["asr_mode_fallback"] = True
         if result.data is not None:
             result.data["final_text"] = final_text
             result.data["applied_corrections"] = [item.model_dump() for item in corrections]
@@ -462,6 +582,21 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                 channels = int(data.get("channels", channels))
                 language = str(data.get("language") or settings.default_language)
                 hotwords = list(data.get("hotwords", []))
+                session_hotword_map = settings.build_hotword_map_for_session(hotwords)
+                requested_asr_mode = data.get("asr_mode")
+                asr_mode_fallback = False
+                if requested_asr_mode is None:
+                    asr_mode = "fast"
+                    asr_mode_provided = False
+                else:
+                    normalized_mode = str(requested_asr_mode).strip().lower()
+                    if normalized_mode in ("fast", "accurate"):
+                        asr_mode = normalized_mode
+                        asr_mode_provided = True
+                    else:
+                        asr_mode = "fast"
+                        asr_mode_provided = True
+                        asr_mode_fallback = True
                 requested_mode = str(data.get("streaming_mode", "") or "").strip().lower()
                 streaming_mode = "segment" if requested_mode == "segment" else "full"
                 if streaming_mode == "segment" and not settings.experimental_segment_streaming_enabled:
@@ -485,6 +620,9 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                                 "sample_rate": sample_rate,
                                 "channels": channels,
                                 "streaming_mode": streaming_mode,
+                                "asr_mode": asr_mode,
+                                "asr_mode_provided": asr_mode_provided,
+                                "asr_mode_fallback": asr_mode_fallback,
                             },
                             meta={"time": now_iso()},
                         ).model_dump(),
@@ -606,6 +744,8 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                     segment_total_postprocess_ms += int(partial_meta.get("postprocess_ms", 0) or 0)
                     segment_total_ms += int(partial_meta.get("total_ms", 0) or 0)
                     last_audio_quality = quality
+                    last_model_name = str(partial_meta.get("model", "") or "")
+                    last_model_cached = bool(partial_meta.get("model_cached", False))
 
                     await websocket.send_json(
                         {
@@ -626,7 +766,11 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                                     "postprocess_ms": partial_meta.get("postprocess_ms", 0),
                                     "total_ms": partial_meta.get("total_ms", 0),
                                     "audio_duration_ms": partial_meta.get("audio_duration_ms", 0),
+                                    "model": partial_meta.get("model", ""),
+                                    "asr_mode": partial_meta.get("asr_mode", asr_mode),
                                     "model_cached": partial_meta.get("model_cached", False),
+                                    "hotwords_enabled": partial_meta.get("hotwords_enabled", settings.hotwords_enabled),
+                                    "hotwords_count": partial_meta.get("hotwords_count", settings.hotwords_count),
                                     "audio_quality": quality,
                                     "time": now_iso(),
                                 },
@@ -695,7 +839,7 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                     merged_raw = raw_state.get_merged_text()
                     final_text, corrections, post_warning = run_postprocess(
                         raw_text=merged_raw,
-                        hotword_map=settings.hotword_map,
+                        hotword_map=session_hotword_map,
                         punctuation_enabled=settings.postprocess_punctuation_enabled,
                         spacing_enabled=settings.postprocess_spacing_enabled,
                         simplified_chinese_enabled=settings.postprocess_simplified_chinese_enabled,
@@ -713,7 +857,7 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                             "warning": warning,
                         },
                         meta={
-                            "model": settings.faster_whisper_model,
+                            "model": last_model_name or settings.faster_whisper_model,
                             "cost_cents": 0,
                             "bytes_received": 0,
                             "decode_ms": segment_total_decode_ms,
@@ -721,7 +865,10 @@ async def ws_transcribe(websocket: WebSocket) -> None:
                             "postprocess_ms": segment_total_postprocess_ms,
                             "total_ms": segment_total_ms + final_total_ms,
                             "audio_duration_ms": 0,
-                            "model_cached": True,
+                            "asr_mode": asr_mode,
+                            "model_cached": last_model_cached,
+                            "hotwords_enabled": settings.hotwords_enabled,
+                            "hotwords_count": settings.hotwords_count,
                             "audio_quality": last_audio_quality or {},
                             "time": now_iso(),
                         },

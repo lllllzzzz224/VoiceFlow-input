@@ -4,6 +4,7 @@ import time
 
 from app.adapters.base import AdapterTranscriptionResult, TranscriptionInput, make_single_segment
 from app.contracts import AsrEngine, TranscriptionData
+from app.settings import settings
 
 
 class MockAsrAdapter:
@@ -14,6 +15,8 @@ class MockAsrAdapter:
 
     async def transcribe(self, payload: TranscriptionInput) -> AdapterTranscriptionResult:
         started_at = time.perf_counter()
+        resolved_mode = "accurate" if (payload.asr_mode or "").strip().lower() == "accurate" else "fast"
+        resolved_model = settings.asr_accurate_model if resolved_mode == "accurate" else settings.asr_fast_model
         byte_count = len(payload.audio_bytes)
         if byte_count == 0:
             text = ""
@@ -42,6 +45,7 @@ class MockAsrAdapter:
                 "warnings": [],
             },
             model_cached=True,
-            model="mock-v1",
+            model=resolved_model,
+            asr_mode=resolved_mode,
         )
 

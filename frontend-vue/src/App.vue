@@ -23,6 +23,10 @@ const {
   isConnected,
   isConnError,
   recordingTime,
+  selectedAsrMode,
+  backendAsrMode,
+  backendAsrModel,
+  backendModelCached,
   segmentStreamingEnabled,
   startRecording,
   stopRecording
@@ -90,6 +94,12 @@ watch(recordingTime, (newTime) => {
       showToast('已达到最大录音时长（30秒），自动提交识别')
       stopRecording(false)
     }
+  }
+})
+
+watch(selectedAsrMode, (newMode) => {
+  if (newMode === 'accurate') {
+    showToast('首次使用准确模式可能需要加载 small 模型，请稍候。', 4000)
   }
 })
 
@@ -181,6 +191,13 @@ onMounted(() => {
 
         <div class="transcript-footer">
           <div class="meta-badges">
+            <span class="meta-text" v-if="backendAsrModel">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+              当前模式: {{ backendAsrMode === 'accurate' ? '准确模式' : '快速模式' }} | 模型: {{ backendAsrModel }}<template v-if="backendModelCached !== null"> | 缓存: {{ backendModelCached ? '已缓存' : '首次加载' }}</template>
+            </span>
+            <span class="meta-text text-amber-600 ml-2" v-if="backendAsrMode && backendAsrMode !== selectedAsrMode">
+              后端实际使用模式与当前选择不一致，请检查后端配置。
+            </span>
             <span class="meta-text" v-if="latencyInfo">
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
               {{ latencyInfo }}
@@ -245,6 +262,44 @@ onMounted(() => {
 
       <!-- Record Control -->
       <div class="controls mt-8 flex flex-col items-center gap-4">
+        
+        <!-- ASR Mode Selector -->
+        <div class="flex flex-col items-center w-full max-w-[320px] mb-4 mt-2">
+          <div class="text-[13px] font-semibold mb-3 text-gray-500 uppercase tracking-widest">识别模式</div>
+          
+          <div class="relative flex w-full bg-gray-100/80 p-1 rounded-full shadow-inner border border-gray-200">
+            <!-- Sliding Background -->
+            <div 
+              class="absolute top-1 bottom-1 left-1 w-[calc(50%-4px)] bg-purple-100 rounded-full shadow-sm transition-transform duration-300 ease-out border border-purple-200/60"
+              :class="selectedAsrMode === 'fast' ? 'translate-x-0' : 'translate-x-full'"
+            ></div>
+
+            <!-- Buttons -->
+            <button 
+              class="flex-1 flex justify-center items-center relative z-10 py-2 text-[14px] tracking-wide font-medium transition-colors duration-300"
+              :class="selectedAsrMode === 'fast' ? 'text-purple-800' : 'text-gray-500 hover:text-gray-700'"
+              @click="selectedAsrMode = 'fast'"
+              :disabled="state === 'recording'"
+            >
+              快速模式
+            </button>
+            <button 
+              class="flex-1 flex justify-center items-center relative z-10 py-2 text-[14px] tracking-wide font-medium transition-colors duration-300"
+              :class="selectedAsrMode === 'accurate' ? 'text-purple-800' : 'text-gray-500 hover:text-gray-700'"
+              @click="selectedAsrMode = 'accurate'"
+              :disabled="state === 'recording'"
+            >
+              准确模式
+            </button>
+          </div>
+          
+          <!-- Unified Help Text -->
+          <p class="text-[12px] text-gray-500 mt-3 text-center transition-opacity duration-300 min-h-[18px]"
+             :class="{'opacity-50': state === 'recording'}">
+            {{ selectedAsrMode === 'fast' ? 'base 模型，极速响应，适合快速记录' : 'small 模型，高准确率，适合会议与正式速记' }}
+          </p>
+        </div>
+
         <button 
           class="primary-btn flex items-center justify-center gap-2" 
           :class="{ 'recording': state === 'recording', 'busy': ['sending', 'transcribing'].includes(state) }" 
