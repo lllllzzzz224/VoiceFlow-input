@@ -8,6 +8,31 @@
 
 ## Current Tasks
 
+### P1-011: ASR Quality Optimization Package
+
+Owner: backend
+Status: completed
+
+Scope:
+
+- add `text_normalizer.py` and route postprocess through it
+- add simplified Chinese normalization chain (NFKC -> OpenCC -> custom mapping -> punctuation -> spacing -> case -> hotword)
+- keep `raw_text`, append normalized `final_text`
+- add `audio_quality.py` and attach audio-quality warnings into result meta
+- add ASR quality preset (`fast|accurate`) and faster-whisper knobs (`temperature`, `condition_on_previous_text`)
+- add experimental segment streaming mode (`audio_segment`, `partial_transcription_result`, `partial_error`) with default disabled
+- keep default record-then-transcribe path unchanged
+
+Validation:
+
+- `python -m compileall backend/app backend/tests`
+- `python backend/tests/postprocess_smoke.py`
+- `python backend/tests/ws_mock_smoke.py`
+- `python backend/tests/history_api_smoke.py`
+- `python backend/tests/markdown_export_smoke.py`
+- `python backend/tests/meeting_summary_smoke.py`
+- `python backend/tests/segment_streaming_smoke.py`
+
 ### P1-006: Optional Xiaomi MiMo Meeting Minutes Agent
 
 Owner: backend

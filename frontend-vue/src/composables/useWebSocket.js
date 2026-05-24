@@ -1,5 +1,15 @@
 import { ref, onUnmounted } from 'vue';
 
+const blobToBase64 = (blob) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onloadend = () => {
+    const result = String(reader.result || '');
+    resolve(result.includes(',') ? result.split(',')[1] : result);
+  };
+  reader.onerror = reject;
+  reader.readAsDataURL(blob);
+});
+
 export function useWebSocket() {
   const state = ref('idle'); // idle | recording | sending | transcribing | done | error
   const statusText = ref('准备就绪');
@@ -15,10 +25,21 @@ export function useWebSocket() {
   const isConnError = ref(false);
   const recordingTime = ref(0);
 
-  let mediaRecorder = null;
+  // Segment streaming state
+  const segmentStreamingEnabled = ref(false);
+  const isSegmentMode = ref(false);
+  const segmentIndex = ref(0);
+  const partialFailureCount = ref(0);
+  
+  let mediaRecorder = null; // Used for default full recording
   let socket = null;
   let audioStream = null;
   let timerInterval = null;
+
+  // Short-lived recorder refs
+  let segmentRecorder = null;
+  let segmentTimer = null;
+  let segmentStopping = false;
 
   const setState = (newState, errorMessage = '') => {
     state.value = newState;
@@ -58,19 +79,67 @@ export function useWebSocket() {
       clearInterval(timerInterval);
       timerInterval = null;
     }
+    if (segmentTimer) {
+      clearTimeout(segmentTimer);
+      segmentTimer = null;
+    }
     if (audioStream) {
       audioStream.getTracks().forEach(track => track.stop());
       audioStream = null;
     }
     if (socket) {
-      socket.onclose = null; // Prevent onclose from triggering error if intentional
+      socket.onclose = null;
       socket.close();
       socket = null;
     }
     mediaRecorder = null;
+    segmentRecorder = null;
   };
 
-  const startRecording = async (onDoneCallback) => {
+  const startNextSegmentRecorder = () => {
+    if (segmentStopping || state.value !== 'recording') return;
+    
+    segmentRecorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm' });
+    let chunks = [];
+    segmentRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunks.push(e.data);
+    };
+    
+    segmentRecorder.onstop = async () => {
+      if (chunks.length > 0 && socket && socket.readyState === WebSocket.OPEN) {
+        const blob = new Blob(chunks, { type: 'audio/webm' });
+        try {
+          const base64 = await blobToBase64(blob);
+          segmentIndex.value++;
+          socket.send(JSON.stringify({
+            type: "audio_segment",
+            segment_index: segmentIndex.value,
+            chunk_base64: base64,
+            is_final: false
+          }));
+        } catch (err) {
+          console.error('Blob to base64 error', err);
+        }
+      }
+      
+      if (!segmentStopping && state.value === 'recording') {
+         startNextSegmentRecorder();
+      } else if (segmentStopping && socket && socket.readyState === WebSocket.OPEN) {
+         socket.send(JSON.stringify({ type: "end" }));
+         setState('transcribing');
+      }
+    };
+    
+    segmentRecorder.start();
+    
+    segmentTimer = setTimeout(() => {
+      if (segmentRecorder && segmentRecorder.state === 'recording') {
+        segmentRecorder.stop();
+      }
+    }, 2500);
+  };
+
+  const startRecording = async (onDoneCallback, onToastCallback) => {
     transcriptText.value = '';
     finalText.value = '';
     rawText.value = '';
@@ -78,6 +147,13 @@ export function useWebSocket() {
     warningText.value = '';
     latencyInfo.value = '';
     recordingTime.value = 0;
+    segmentStopping = false;
+    partialFailureCount.value = 0;
+    segmentIndex.value = 0;
+    
+    // Snapshot the toggle state when recording starts
+    isSegmentMode.value = segmentStreamingEnabled.value;
+    
     setState('idle');
 
     try {
@@ -86,14 +162,21 @@ export function useWebSocket() {
 
       socket.onopen = () => {
         updateConnectionState(true, false);
-        socket.send(JSON.stringify({
+        
+        const startMsg = {
           type: "start",
           session_id: "vue-demo",
           format: "webm",
           sample_rate: 16000,
           channels: 1,
           language: "zh"
-        }));
+        };
+        
+        if (isSegmentMode.value) {
+          startMsg.streaming_mode = "segment";
+        }
+        
+        socket.send(JSON.stringify(startMsg));
 
         setState('recording');
         
@@ -101,33 +184,54 @@ export function useWebSocket() {
           recordingTime.value++;
         }, 1000);
         
-        mediaRecorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm' });
-        mediaRecorder.ondataavailable = (event) => {
-          if (event.data.size > 0 && socket.readyState === WebSocket.OPEN) {
-            socket.send(event.data);
-          }
-        };
+        if (isSegmentMode.value) {
+          startNextSegmentRecorder();
+        } else {
+          // Default behavior
+          mediaRecorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm' });
+          mediaRecorder.ondataavailable = (event) => {
+            if (event.data.size > 0 && socket.readyState === WebSocket.OPEN) {
+              socket.send(event.data);
+            }
+          };
 
-        mediaRecorder.onstop = () => {
-          if (timerInterval) {
-            clearInterval(timerInterval);
-            timerInterval = null;
-          }
-          setState('sending');
-          if (socket.readyState === WebSocket.OPEN) {
-            socket.send(JSON.stringify({ type: "end" }));
-            setState('transcribing');
-          }
-        };
+          mediaRecorder.onstop = () => {
+            if (timerInterval) {
+              clearInterval(timerInterval);
+              timerInterval = null;
+            }
+            setState('sending');
+            if (socket.readyState === WebSocket.OPEN) {
+              socket.send(JSON.stringify({ type: "end" }));
+              setState('transcribing');
+            }
+          };
 
-        mediaRecorder.start(250);
+          mediaRecorder.start(250);
+        }
       };
 
       socket.onmessage = (event) => {
         try {
           const res = JSON.parse(event.data);
+          
           if (res.type === 'ack') {
             console.log('Received ack');
+          } else if (res.type === 'partial_transcription_result') {
+            if (res.result && res.result.data) {
+               transcriptText.value = res.result.data.merged_text || '';
+               statusText.value = '准流式识别中...';
+               if (res.result.data.latency_ms) {
+                 latencyInfo.value = `片段延迟: ${res.result.data.latency_ms}ms`;
+               }
+            }
+          } else if (res.type === 'partial_error') {
+            if (onToastCallback) onToastCallback('某个片段识别失败，已继续录音');
+            partialFailureCount.value++;
+            if (partialFailureCount.value >= 3) {
+               if (onToastCallback) onToastCallback('连续失败，已自动关闭实验开关，下次将使用整段识别');
+               segmentStreamingEnabled.value = false;
+            }
           } else if (res.type === 'transcription_result') {
             if (res.result && res.result.success && res.result.data) {
               transcriptText.value = res.result.data.final_text || res.result.data.raw_text || '';
@@ -165,7 +269,13 @@ export function useWebSocket() {
             }
           } else if (res.type === 'error') {
             if (res.result && res.result.error) {
-              setState('error', res.result.error.message || '发生错误');
+              if (res.result.error.code === 'CONFIG_ERROR') {
+                 if (onToastCallback) onToastCallback('后端未启用准流式识别，已切回整段识别');
+                 segmentStreamingEnabled.value = false;
+                 setState('error', '后端配置不支持准流式');
+              } else {
+                 setState('error', res.result.error.message || '发生错误');
+              }
             } else {
               setState('error', '发生未知错误');
             }
@@ -209,8 +319,25 @@ export function useWebSocket() {
       setState('idle');
       return;
     }
-    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-      mediaRecorder.stop();
+    
+    if (isSegmentMode.value) {
+      segmentStopping = true;
+      setState('sending');
+      if (segmentTimer) {
+        clearTimeout(segmentTimer);
+        segmentTimer = null;
+      }
+      if (segmentRecorder && segmentRecorder.state === 'recording') {
+        segmentRecorder.stop();
+      } else if (socket && socket.readyState === WebSocket.OPEN) {
+        // Fallback if recorder was already stopped and waiting to start next
+        socket.send(JSON.stringify({ type: "end" }));
+        setState('transcribing');
+      }
+    } else {
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+      }
     }
   };
 
@@ -231,6 +358,7 @@ export function useWebSocket() {
     isConnected,
     isConnError,
     recordingTime,
+    segmentStreamingEnabled,
     startRecording,
     stopRecording
   };

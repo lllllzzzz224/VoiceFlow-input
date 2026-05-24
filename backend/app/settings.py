@@ -12,13 +12,66 @@ class Settings:
         self.asr_engine = AsrEngine(raw_engine) if raw_engine in AsrEngine._value2member_map_ else AsrEngine.MOCK
         self.mock_response_text = os.getenv("MOCK_RESPONSE_TEXT", "mock transcription").strip()
 
-        self.faster_whisper_model = os.getenv("FASTER_WHISPER_MODEL", "base").strip() or "base"
+        self.asr_quality_preset = self._parse_quality_preset(os.getenv("ASR_QUALITY_PRESET", "fast").strip())
+        explicit_model = os.getenv("FASTER_WHISPER_MODEL", "").strip()
+        if explicit_model:
+            self.faster_whisper_model = explicit_model
+        else:
+            self.faster_whisper_model = "small" if self.asr_quality_preset == "accurate" else "base"
+
         self.faster_whisper_device = os.getenv("FASTER_WHISPER_DEVICE", "cpu").strip() or "cpu"
         self.faster_whisper_compute_type = os.getenv("FASTER_WHISPER_COMPUTE_TYPE", "int8").strip() or "int8"
         self.faster_whisper_beam_size = self._parse_positive_int(os.getenv("FASTER_WHISPER_BEAM_SIZE", "5").strip(), 5)
         self.faster_whisper_vad_filter = self._parse_bool(os.getenv("FASTER_WHISPER_VAD_FILTER", "true").strip(), True)
+        self.faster_whisper_condition_on_previous_text = self._parse_bool(
+            os.getenv("FASTER_WHISPER_CONDITION_ON_PREVIOUS_TEXT", "false").strip(),
+            False,
+        )
+        self.faster_whisper_temperature = self._parse_non_negative_float(
+            os.getenv("FASTER_WHISPER_TEMPERATURE", "0").strip(),
+            0.0,
+        )
         self.default_language = os.getenv("DEFAULT_LANGUAGE", "zh").strip() or "zh"
         self.asr_initial_prompt = os.getenv("ASR_INITIAL_PROMPT", "").strip()
+
+        self.postprocess_punctuation_enabled = self._parse_bool(
+            os.getenv("POSTPROCESS_PUNCTUATION_ENABLED", "true").strip(),
+            True,
+        )
+        self.postprocess_spacing_enabled = self._parse_bool(
+            os.getenv("POSTPROCESS_SPACING_ENABLED", "true").strip(),
+            True,
+        )
+        self.postprocess_simplified_chinese_enabled = self._parse_bool(
+            os.getenv("POSTPROCESS_SIMPLIFIED_CHINESE_ENABLED", "true").strip(),
+            True,
+        )
+
+        self.max_audio_bytes = self._parse_positive_int(os.getenv("MAX_AUDIO_BYTES", "8388608").strip(), 8388608)
+        self.max_recording_seconds = self._parse_non_negative_float(os.getenv("MAX_RECORDING_SECONDS", "30").strip(), 30.0)
+        self.min_audio_duration_ms = self._parse_positive_int(os.getenv("MIN_AUDIO_DURATION_MS", "1000").strip(), 1000)
+        self.low_volume_rms_threshold = self._parse_non_negative_float(
+            os.getenv("LOW_VOLUME_RMS_THRESHOLD", "0.008").strip(),
+            0.008,
+        )
+        self.mostly_silent_ratio_threshold = self._parse_non_negative_float(
+            os.getenv("MOSTLY_SILENT_RATIO_THRESHOLD", "0.85").strip(),
+            0.85,
+        )
+
+        self.experimental_segment_streaming_enabled = self._parse_bool(
+            os.getenv("EXPERIMENTAL_SEGMENT_STREAMING_ENABLED", "false").strip(),
+            False,
+        )
+        self.segment_streaming_max_segment_seconds = self._parse_positive_int(
+            os.getenv("SEGMENT_STREAMING_MAX_SEGMENT_SECONDS", "5").strip(),
+            5,
+        )
+        self.segment_streaming_min_segment_seconds = self._parse_positive_int(
+            os.getenv("SEGMENT_STREAMING_MIN_SEGMENT_SECONDS", "1").strip(),
+            1,
+        )
+
         self.ai_meeting_summary_enabled = self._parse_bool(
             os.getenv("AI_MEETING_SUMMARY_ENABLED", "false").strip(),
             False,
@@ -30,36 +83,25 @@ class Settings:
         )
         self.xiaomi_model = os.getenv("XIAOMI_MODEL", "MiMo-V2.5").strip() or "MiMo-V2.5"
 
-        self.postprocess_punctuation_enabled = os.getenv("POSTPROCESS_PUNCTUATION_ENABLED", "true").strip().lower() != "false"
-        self.postprocess_spacing_enabled = os.getenv("POSTPROCESS_SPACING_ENABLED", "true").strip().lower() != "false"
-        self.postprocess_simplified_chinese_enabled = self._parse_bool(
-            os.getenv("POSTPROCESS_SIMPLIFIED_CHINESE_ENABLED", "true").strip(),
-            True,
-        )
         self.history_file_path = os.getenv("HISTORY_FILE_PATH", "data/history.json").strip() or "data/history.json"
-        self.max_audio_bytes = self._parse_max_audio_bytes(os.getenv("MAX_AUDIO_BYTES", "8388608").strip())
-        self.max_recording_seconds = self._parse_max_recording_seconds(os.getenv("MAX_RECORDING_SECONDS", "30").strip())
         self.cors_origins = self._load_cors_origins()
         self.hotword_map = self._load_hotword_map()
 
-    def _parse_max_audio_bytes(self, raw: str) -> int:
-        try:
-            value = int(raw)
-            return value if value > 0 else 8388608
-        except Exception:
-            return 8388608
-
-    def _parse_max_recording_seconds(self, raw: str) -> float:
-        try:
-            value = float(raw)
-            return value if value > 0 else 30.0
-        except Exception:
-            return 30.0
+    def _parse_quality_preset(self, raw: str) -> str:
+        normalized = raw.strip().lower()
+        return normalized if normalized in ("fast", "accurate") else "fast"
 
     def _parse_positive_int(self, raw: str, fallback: int) -> int:
         try:
             value = int(raw)
             return value if value > 0 else fallback
+        except Exception:
+            return fallback
+
+    def _parse_non_negative_float(self, raw: str, fallback: float) -> float:
+        try:
+            value = float(raw)
+            return value if value >= 0 else fallback
         except Exception:
             return fallback
 
@@ -91,12 +133,13 @@ class Settings:
         return merged
 
     def _load_hotword_map(self) -> dict[str, str]:
+        qiniu = "\u4e03\u725b\u4e91"
         default_map = {
-            "qiniu": "\u4e03\u725b\u4e91",
-            "qi niu yun": "\u4e03\u725b\u4e91",
+            "qiniu": qiniu,
+            "qi niu yun": qiniu,
+            qiniu: qiniu,
             "kodo": "Kodo",
             "mcp": "MCP",
-            "\u4e03\u725b\u4e91": "\u4e03\u725b\u4e91",
             "github": "GitHub",
             "fastapi": "FastAPI",
             "faster whisper": "faster-whisper",
@@ -121,4 +164,3 @@ class Settings:
 
 
 settings = Settings()
-

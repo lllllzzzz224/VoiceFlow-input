@@ -31,6 +31,16 @@ class MockAsrAdapter:
             decode_ms=0,
             asr_ms=max(latency_ms, 1),
             audio_duration_ms=0,
+            audio_quality={
+                "audio_duration_ms": 0,
+                "rms": 0.0,
+                "peak": 0.0,
+                "silence_ratio": 0.0,
+                "too_short": False,
+                "low_volume": False,
+                "mostly_silent": False,
+                "warnings": [],
+            },
             model_cached=True,
             model="mock-v1",
         )
