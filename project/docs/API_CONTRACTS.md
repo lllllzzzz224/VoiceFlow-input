@@ -57,10 +57,13 @@ error
 ```text
 start
 audio_chunk
+audio_segment
 end
 ping
 ack
 pong
+partial_transcription_result
+partial_error
 transcription_result
 error
 ```
@@ -70,15 +73,67 @@ error
 ```text
 MIC_PERMISSION_DENIED
 MIC_DEVICE_NOT_FOUND
+VALIDATION_ERROR
 NO_SPEECH_DETECTED
 AUDIO_CAPTURE_ERROR
 AUDIO_TOO_LARGE
 ASR_ENGINE_ERROR
 ASR_TIMEOUT
 POSTPROCESS_ERROR
+AI_PROVIDER_ERROR
 CONFIG_ERROR
 EXPORT_ERROR
 UNKNOWN_ERROR
+```
+
+## POST /ai/meeting-summary
+
+Request:
+
+```json
+{
+  "transcript": "string",
+  "mode": "minutes",
+  "include_original": true
+}
+```
+
+Success response:
+
+```json
+{
+  "success": true,
+  "data": {
+    "summary_markdown": "string",
+    "provider": "xiaomi_mimo",
+    "model": "MiMo-V2.5",
+    "mode": "minutes"
+  },
+  "error": null,
+  "meta": {
+    "latency_ms": 1200,
+    "ai_enabled": true,
+    "ai_used": true
+  }
+}
+```
+
+Failure response example:
+
+```json
+{
+  "success": false,
+  "data": null,
+  "error": {
+    "code": "CONFIG_ERROR",
+    "message": "AI meeting summary is not configured.",
+    "details": {}
+  },
+  "meta": {
+    "ai_enabled": false,
+    "ai_used": false
+  }
+}
 ```
 
 ### AsrEngine
@@ -138,6 +193,7 @@ Rules:
 1. `type=start` begins a session.
 2. `sample_rate`, `channels`, `language` and `hotwords` are optional in the first mock flow but should remain stable extension points.
 3. API keys must not be sent from frontend.
+4. `streaming_mode` is optional. Default is full session mode. `streaming_mode=segment` is experimental and controlled by backend config.
 
 ### Client Audio Chunk
 
@@ -161,6 +217,23 @@ Rules:
 1. Binary chunks are preferred for browser `MediaRecorder` integration.
 2. JSON base64 chunks are allowed for simple tests.
 3. Backend must append chunks until `end`.
+
+### Client Audio Segment (Experimental)
+
+```json
+{
+  "type": "audio_segment",
+  "segment_index": 1,
+  "chunk_base64": "BASE64_WEBM_SEGMENT",
+  "is_final": false
+}
+```
+
+Rules:
+
+1. Only valid when `streaming_mode=segment`.
+2. Each `audio_segment` payload should be a complete segment blob.
+3. Segment failure returns `partial_error` without forcing socket close.
 
 ### Client End Message
 
@@ -236,10 +309,20 @@ Current backend envelope:
 
 Rules:
 
-1. Frontend must read transcript from `message.result.data.raw_text` unless a future `final_text` is appended.
+1. Frontend should prefer `message.result.data.final_text` when present, and fallback to `raw_text`.
 2. `engine` and `latency_ms` are required for evaluation.
 3. `cost_cents` must be `0` for local/mock inference or estimated for cloud calls.
 4. Existing `type=transcription_result` must not be renamed without updating frontend and tests together.
+
+Additional meta fields:
+
+- `decode_ms`
+- `asr_ms`
+- `postprocess_ms`
+- `total_ms`
+- `audio_duration_ms`
+- `model_cached`
+- `audio_quality`
 
 ### Server Error Message
 

@@ -1,398 +1,207 @@
 # VoiceFlow Input Backend (Web MVP)
 
-Minimal backend loop for Web MVP:
+Backend closed loop:
 
-`browser audio recording -> WebSocket -> FastAPI -> ASR adapter -> transcription text`
+`browser recording -> WebSocket -> FastAPI -> ASR adapter -> postprocess -> history/export`
 
-Current recognition mode is **record-then-transcribe** (near-real-time after recording ends), not token/word-by-word streaming ASR.
+Default behavior is still **record-then-transcribe**.  
+Experimental segment streaming is available but **disabled by default**.
 
-Current implementation:
-
-- `GET /health`
-- `WS /ws/transcribe`
-- audio chunk ingest via binary frame or JSON `chunk_base64`
-- mock transcription result with stable response shape
-- `faster-whisper` adapter integration and `xiaomi_api` boundary placeholder
-
-## Quick Start (Windows PowerShell)
+## Quick Start (PowerShell)
 
 ```powershell
 cd D:\qiniu\backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+python -m pip install -r requirements.txt
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-## Test
+## Runtime Modes
 
-Run WebSocket mock smoke test:
+`ASR_ENGINE=mock`:
 
-```powershell
-cd D:\qiniu\backend
-python tests\ws_mock_smoke.py
-python tests\postprocess_smoke.py
-python tests\history_api_smoke.py
-python tests\markdown_export_smoke.py
-python tests\cors_smoke.py
-```
+- protocol联调与测试
+- 不依赖模型
 
-This smoke test covers:
+`ASR_ENGINE=faster_whisper`:
 
-- `/health`
-- WS connect
-- `start`
-- binary chunk
-- `end`
-- mock transcript result
-- no-speech and base64 error path
-- invalid JSON path
-- unsupported message type path
-- adapter failure path (`ASR_ENGINE_ERROR`)
-- postprocess fixed sentence and failure fallback
-- history write/read/clear API path
-- markdown export API path (limit/success-only/empty history)
-- CORS preflight and origin header path (`/history`)
+- 真实本地识别
+- 需要可用 `ffmpeg`
 
-Optional real faster-whisper smoke test:
+## ASR Quality Preset
 
-```powershell
-cd D:\qiniu\backend
-$env:RUN_FASTER_WHISPER_TEST="1"
-python tests\faster_whisper_optin_smoke.py
-```
+`ASR_QUALITY_PRESET=fast|accurate` (default `fast`)
 
-Reset to mock:
+- `fast`: default model `base`, lower latency
+- `accurate`: default model `small`, better quality
 
-```powershell
-$env:ASR_ENGINE="mock"
-```
+Priority:
 
-Run live checks against a running server:
+1. explicit `FASTER_WHISPER_MODEL` wins
+2. otherwise use `ASR_QUALITY_PRESET`
+3. fallback `base`
 
-```powershell
-cd D:\qiniu\backend
-python tests\ws_live_mock_checks.py --base-url http://127.0.0.1:8000
-```
+## Environment Variables
 
-Run simple concurrency smoke (2-5 sessions):
+Core:
 
-```powershell
-cd D:\qiniu\backend
-python tests\ws_live_concurrency_smoke.py --base-url http://127.0.0.1:8000 --sessions 3
-```
+- `ASR_ENGINE=mock|faster_whisper`
+- `ASR_QUALITY_PRESET=fast|accurate`
+- `DEFAULT_LANGUAGE=zh`
+- `MAX_AUDIO_BYTES=8388608`
+- `MAX_RECORDING_SECONDS=30`
+
+faster-whisper:
+
+- `FASTER_WHISPER_MODEL=base|small`
+- `FASTER_WHISPER_DEVICE=cpu`
+- `FASTER_WHISPER_COMPUTE_TYPE=int8`
+- `FASTER_WHISPER_BEAM_SIZE=5`
+- `FASTER_WHISPER_VAD_FILTER=true`
+- `FASTER_WHISPER_CONDITION_ON_PREVIOUS_TEXT=false`
+- `FASTER_WHISPER_TEMPERATURE=0`
+- `ASR_INITIAL_PROMPT=` (default empty, only passed when explicitly set)
+
+Postprocess:
+
+- `POSTPROCESS_SIMPLIFIED_CHINESE_ENABLED=true`
+- `POSTPROCESS_SPACING_ENABLED=true`
+- `POSTPROCESS_PUNCTUATION_ENABLED=true`
+- `HOTWORD_MAP_JSON` (optional)
+
+Default hotword behavior includes:
+
+- `七牛云`
+- `Kodo`
+- `MCP`
+- `GitHub`
+- `FastAPI`
+- `faster-whisper`
+- `WebSocket`
+
+Audio quality warnings:
+
+- `MIN_AUDIO_DURATION_MS=1000`
+- `LOW_VOLUME_RMS_THRESHOLD=0.008`
+- `MOSTLY_SILENT_RATIO_THRESHOLD=0.85`
+
+Experimental segment streaming:
+
+- `EXPERIMENTAL_SEGMENT_STREAMING_ENABLED=false`
+- `SEGMENT_STREAMING_MIN_SEGMENT_SECONDS=1`
+- `SEGMENT_STREAMING_MAX_SEGMENT_SECONDS=5`
+
+History / CORS / optional AI summary:
+
+- `HISTORY_FILE_PATH=data/history.json`
+- `CORS_ORIGINS=http://localhost:8080,http://127.0.0.1:8080`
+- `AI_MEETING_SUMMARY_ENABLED=false`
+- `XIAOMI_API_KEY=`
+- `XIAOMI_API_BASE_URL=https://token-plan-cn.xiaomimimo.com/v1`
+- `XIAOMI_MODEL=MiMo-V2.5`
 
 ## API
 
-### Health
+### `GET /health`
 
-```http
-GET /health
-```
+Returns standard shape and active engine metadata.
 
-Response shape:
+### `WS /ws/transcribe`
 
-```json
-{
-  "success": true,
-  "data": {
-    "status": "ok",
-    "service": "voiceflow-input-backend"
-  },
-  "error": null,
-  "meta": {
-    "asr_engine": "mock",
-    "version": "0.1.0",
-    "time": "2026-05-23T00:00:00+00:00"
-  }
-}
-```
-
-### WebSocket Transcribe
-
-```text
-WS /ws/transcribe
-```
-
-Client message types:
-
-1. `start` (JSON text frame)
-2. audio chunk:
-   - binary frame (`bytes`)
-   - or JSON `{ "type": "audio_chunk", "chunk_base64": "..." }`
-3. `end` (JSON text frame)
-
-Example flow:
-
-```json
-{ "type": "start", "sample_rate": 16000, "channels": 1, "language": "zh", "hotwords": ["Kodo"] }
-```
-
-then send binary audio chunks, then:
-
-```json
-{ "type": "end" }
-```
-
-Server final message shape:
+Stable final envelope:
 
 ```json
 {
   "type": "transcription_result",
   "result": {
     "success": true,
-    "data": {
-      "raw_text": "mock transcription (12345 bytes)",
-      "segments": [
-        { "start_ms": 0, "end_ms": 0, "text": "mock transcription (12345 bytes)" }
-      ],
-      "engine": "mock",
-      "latency_ms": 1
-    },
+    "data": {},
     "error": null,
-    "meta": {
-      "model": "mock-v1",
-      "cost_cents": 0,
-      "bytes_received": 12345,
-      "decode_ms": 0,
-      "asr_ms": 1,
-      "postprocess_ms": 0,
-      "total_ms": 2,
-      "audio_duration_ms": 1250,
-      "model_cached": true,
-      "time": "2026-05-23T00:00:00+00:00"
-    }
+    "meta": {}
   }
 }
 ```
 
-`meta` timing fields:
+Default record-then-transcribe messages:
 
-- `bytes_received`: total audio payload size for the session
-- `decode_ms`: decode stage latency (ffmpeg/media decode)
-- `asr_ms`: model inference stage latency
-- `postprocess_ms`: text postprocessing latency
-- `total_ms`: total latency from `end` handling to final response
-- `audio_duration_ms`: decoded audio duration after ffmpeg resample
-- `model_cached`: whether current recognition reused cached model instance
+1. `start`
+2. binary audio chunk or `audio_chunk` base64 fallback
+3. `end`
 
-### History API
+`meta` timing includes:
 
-```http
-GET /history?limit=50&success_only=false
-DELETE /history
-```
+- `bytes_received`
+- `decode_ms`
+- `asr_ms`
+- `postprocess_ms`
+- `total_ms`
+- `audio_duration_ms`
+- `model_cached`
+- `audio_quality`
 
-`GET /history` response `data`:
+Experimental segment mode:
 
-```json
-{
-  "items": [
-    {
-      "id": "hist_xxx",
-      "created_at": "2026-05-23T00:00:00+00:00",
-      "raw_text": "string",
-      "final_text": "string",
-      "engine": "mock",
-      "latency_ms": 1,
-      "success": true,
-      "error_code": null,
-      "audio_duration_ms": 1250,
-      "decode_ms": 120,
-      "asr_ms": 610,
-      "postprocess_ms": 3,
-      "total_ms": 745
-    }
-  ],
-  "count": 1,
-  "total_count": 1,
-  "success_only": false,
-  "limit": 50
-}
-```
+- start with `"streaming_mode": "segment"`
+- send `audio_segment` messages (each is a complete webm segment blob in base64)
+- receive `partial_transcription_result` or `partial_error`
+- `end` returns normal `transcription_result`
 
-History is stored in local JSON and does not include raw audio.
-Failure records only keep `error_code` and base metadata (engine/timing), with empty transcript text.
+Notes:
 
-### Markdown Export API
+- partial results are not written into history
+- final result is written once
+- no raw audio persistence
+- no silero-vad; currently uses faster-whisper `vad_filter`
 
-```http
-GET /export/markdown
-```
+### `GET /history`
 
-Query params:
+Query:
 
 - `limit` (default `50`, min `1`, max `200`)
 - `success_only` (default `false`)
 
-Response:
+### `DELETE /history`
 
-- Content-Type: `text/markdown; charset=utf-8`
-- Body: markdown text generated from local history
-- Records are sorted by `created_at` descending and truncated by `limit`
-- Per record includes:
-  - `created_at`
-  - `final_text` (fallback `raw_text` when final is empty)
-  - `engine`
-  - `latency_ms`
-  - `success` / `error_code`
-- Empty history still returns valid markdown with a "No Records" section.
-- For very large history, keep `limit` small to avoid oversized exports.
+Clear local transcript history.
 
-### AI Meeting Summary API (Optional)
+### `GET /export/markdown`
 
-```http
-POST /ai/meeting-summary
-```
+Query:
 
-Request JSON:
+- `limit` (default `50`, min `1`, max `200`)
+- `success_only` (default `false`)
 
-```json
-{
-  "transcript": "string",
-  "mode": "minutes",
-  "include_original": true
-}
-```
+Returns `Content-Type: text/markdown; charset=utf-8`.
 
-Success response (`StandardResult`):
+## CORS
 
-```json
-{
-  "success": true,
-  "data": {
-    "summary_markdown": "string",
-    "provider": "xiaomi_mimo",
-    "model": "MiMo-V2.5",
-    "mode": "minutes"
-  },
-  "error": null,
-  "meta": {
-    "latency_ms": 1200,
-    "ai_enabled": true,
-    "ai_used": true
-  }
-}
-```
+For frontend `http://localhost:8080` -> backend `http://localhost:8000`, backend CORS is configured for local development origins by default.
 
-Failure response (`StandardResult`):
+Preflight check:
 
-```json
-{
-  "success": false,
-  "data": null,
-  "error": {
-    "code": "CONFIG_ERROR",
-    "message": "AI meeting summary is not configured.",
-    "details": {}
-  },
-  "meta": {
-    "ai_enabled": false,
-    "ai_used": false
-  }
-}
-```
+- `OPTIONS /history` should return success with `access-control-allow-origin`
 
-Notes:
+## ffmpeg Notes
 
-- MiMo only processes transcript text; audio is still handled by ASR path.
-- Frontend must call backend API, not MiMo directly.
-- API key is loaded only from backend local environment variables.
+When using `ASR_ENGINE=faster_whisper`, backend decodes browser webm bytes through `ffmpeg`.
 
-## Config
+Lookup order:
 
-Environment variables:
+1. `FFMPEG_BINARY`
+2. system `PATH`
+3. local `ffmpeg.exe` / `bin/ffmpeg.exe`
+4. `imageio-ffmpeg` bundled binary
 
-- `ASR_ENGINE` (`mock` by default)
-- `MOCK_RESPONSE_TEXT` (`mock transcription` by default)
-- `POSTPROCESS_PUNCTUATION_ENABLED` (`true` by default)
-- `POSTPROCESS_SPACING_ENABLED` (`true` by default)
-- `POSTPROCESS_SIMPLIFIED_CHINESE_ENABLED` (`true` by default)
-- `HOTWORD_MAP_JSON` (JSON object string, optional; defaults include `七牛云`, `Kodo`, `MCP`, `GitHub`, `FastAPI`, `faster-whisper`, `WebSocket`)
-- `HISTORY_FILE_PATH` (`data/history.json` by default)
-- `CORS_ORIGINS` (comma-separated, default includes `http://localhost:8080,http://127.0.0.1:8080`)
-- `MAX_AUDIO_BYTES` (default `8388608`, about 8MB per session)
-- `MAX_RECORDING_SECONDS` (default `30`, checked from decoded audio duration)
-- `AI_MEETING_SUMMARY_ENABLED` (default `false`)
-- `XIAOMI_API_KEY` (default empty; required only when AI summary is enabled)
-- `XIAOMI_API_BASE_URL` (default `https://token-plan-cn.xiaomimimo.com/v1`)
-- `XIAOMI_MODEL` (default `MiMo-V2.5`)
-
-## CORS For Frontend
-
-When frontend runs on `http://localhost:8080` and backend on `http://localhost:8000`, CORS must be enabled for browser fetch to `/history` and `/export/markdown`.
-
-Current backend CORS config:
-
-- Allowed origins:
-  - `http://localhost:8080`
-  - `http://127.0.0.1:8080`
-  - plus any `CORS_ORIGINS` entries
-- Allowed methods: `GET`, `DELETE`, `OPTIONS`
-- Allowed headers: `Content-Type`
-
-Local dev expansion example:
-
-```powershell
-$env:CORS_ORIGINS="http://localhost:8080,http://127.0.0.1:8080"
-```
-
-## History And AI Boundary
-
-- History is for user review, markdown export and evaluation metrics.
-- AI correction (including future Xiaomi integration) must default to current `raw_text` + hotwords + correction mode.
-- AI correction must not read full history by default.
-- If short recent context is added later, limit to 1-3 recent short items with length caps.
-
-Supported engine values:
-
-- `mock`
-- `faster_whisper` (wired; requires model/runtime dependencies)
-- `xiaomi_api` (placeholder only, not wired yet)
-
-faster-whisper config:
-
-- `FASTER_WHISPER_MODEL` (default: `base`)
-- `FASTER_WHISPER_DEVICE` (default: `cpu`)
-- `FASTER_WHISPER_COMPUTE_TYPE` (default: `int8`)
-- `FASTER_WHISPER_BEAM_SIZE` (default: `5`)
-- `FASTER_WHISPER_VAD_FILTER` (default: `true`)
-- `DEFAULT_LANGUAGE` (default: `zh`)
-- `ASR_INITIAL_PROMPT` (default: empty; only passed when explicitly configured)
-
-### System Dependencies
-
-When `ASR_ENGINE` is set to `faster_whisper`, the backend relies on the `ffmpeg` executable to robustly decode incoming webm streams into 16kHz raw PCM data (bypassing PyAV container issues). 
-
-- **Requirement**: `ffmpeg` (the executable binary) must be available.
-- **Resolution Path**: The backend first tries `FFMPEG_BINARY`, then system `PATH`, then local `ffmpeg.exe`/`bin/ffmpeg.exe`. Each candidate must pass a `-version` health probe. If all fail, backend falls back to bundled `imageio-ffmpeg` binary.
-
-Enable real faster-whisper recognition:
-
-```powershell
-$env:ASR_ENGINE="faster_whisper"
-$env:FASTER_WHISPER_MODEL="base"
-$env:FASTER_WHISPER_DEVICE="cpu"
-$env:FASTER_WHISPER_COMPUTE_TYPE="int8"
-uvicorn app.main:app --host 127.0.0.1 --port 8000
-```
-
-If model/runtime/ffmpeg/audio decode fails, API returns `ASR_ENGINE_ERROR`.
-
-If session audio bytes exceed `MAX_AUDIO_BYTES`, API returns `AUDIO_TOO_LARGE`.
-
-If decoded audio duration exceeds `MAX_RECORDING_SECONDS`, API returns `CONFIG_ERROR`.
-
-Enable optional MiMo meeting summary locally:
+## Test Commands
 
 ```powershell
 cd D:\qiniu\backend
-.\.venv\Scripts\Activate.ps1
-
-$env:AI_MEETING_SUMMARY_ENABLED="true"
-$env:XIAOMI_API_KEY="your-local-api-key"
-$env:XIAOMI_API_BASE_URL="https://token-plan-cn.xiaomimimo.com/v1"
-$env:XIAOMI_MODEL="MiMo-V2.5"
-
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+python -m compileall app tests
+python tests\postprocess_smoke.py
+python tests\ws_mock_smoke.py
+python tests\history_api_smoke.py
+python tests\markdown_export_smoke.py
+python tests\meeting_summary_smoke.py
+python tests\segment_streaming_smoke.py
 ```
