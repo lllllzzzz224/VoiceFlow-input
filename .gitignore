@@ -22,6 +22,7 @@ temp/
 tmp/
 backend/data/*.json
 backend/eval_samples/
+backend/eval_manifest.json
 backend/eval_report*.json
 data/*.json
 backend/ffmpeg.exe
@@ -31,6 +32,10 @@ backend/*.dll
 *.m4a
 *.webm
 *.ogg
+*.mp4
+*.mov
+*.mkv
+屏幕截图*.png
 
 # Node / frontend
 node_modules/
