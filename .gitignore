@@ -21,6 +21,8 @@ models/
 temp/
 tmp/
 backend/data/*.json
+backend/eval_samples/
+backend/eval_report*.json
 data/*.json
 backend/ffmpeg.exe
 backend/*.dll

@@ -11,6 +11,7 @@ Current backend supports:
 - `GET /history`, `DELETE /history`
 - `GET /export/markdown`
 - optional `POST /ai/meeting-summary` (default DeepSeek provider with local fallback)
+- local ASR evaluation script for CER, hotword hit rate, latency, and zero ASR API cost evidence
 
 ## Quick Start
 
@@ -30,6 +31,7 @@ Detailed backend config, protocol, and test commands are in [backend/README.md](
 - Experimental segment streaming exists and is disabled by default.
 - API keys are backend-only environment variables; frontend never receives keys.
 - Raw audio is not saved in history.
+- Local evaluation audio samples and reports are ignored by Git.
 - No third-party source code is vendored.
 
 ## UI Redesign & Frontend Updates (PR Notes)

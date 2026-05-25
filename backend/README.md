@@ -238,11 +238,48 @@ Lookup order:
 3. local `ffmpeg.exe` / `bin/ffmpeg.exe`
 4. `imageio-ffmpeg` bundled binary
 
+## ASR Evaluation
+
+The backend includes a local ASR evaluation script for demo evidence:
+
+- accuracy: Chinese CER (character error rate)
+- terminology quality: hotword hit rate
+- response speed: per-sample latency
+- cost: local ASR API cost is `0`
+
+Prepare local audio files outside Git:
+
+```text
+backend/eval_samples/demo_001.webm
+backend/eval_samples/demo_002.webm
+```
+
+Copy the example manifest and point it to your local samples:
+
+```powershell
+cd D:\qiniu\backend
+Copy-Item eval_manifest.example.json eval_manifest.json
+```
+
+Run evaluation:
+
+```powershell
+python tools\evaluate_asr.py --manifest eval_manifest.json --output eval_report.json
+```
+
+Notes:
+
+- `backend/eval_samples/` and `backend/eval_report*.json` are ignored by Git.
+- Do not commit personal voice recordings.
+- The script uses the same ASR adapter and postprocess path as the WebSocket flow.
+- CER is objective text distance; final demo quality should still be checked manually for readability.
+
 ## Test Commands
 
 ```powershell
 cd D:\qiniu\backend
 python -m compileall app tests
+python tests\evaluate_asr_smoke.py
 python tests\postprocess_smoke.py
 python tests\ws_mock_smoke.py
 python tests\history_api_smoke.py
