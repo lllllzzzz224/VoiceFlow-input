@@ -42,6 +42,7 @@ const {
 
 const {
   summaryMarkdown,
+  summaryStructured,
   summaryLoading,
   summaryError,
   summaryMeta,
@@ -238,16 +239,72 @@ onMounted(() => {
           {{ summaryError }}
         </div>
 
-        <div v-if="summaryMarkdown && !summaryLoading" class="summary-result-area">
+        <div v-if="(summaryMarkdown || summaryStructured) && !summaryLoading" class="summary-result-area">
           <div class="summary-meta" v-if="summaryMeta">
             <span class="meta-badge">提供商: {{ summaryMeta.provider }}</span>
             <span class="meta-badge">模型: {{ summaryMeta.model }}</span>
             <span class="meta-badge" v-if="summaryMeta.latency_ms">耗时: {{ summaryMeta.latency_ms }}ms</span>
           </div>
-          <div class="summary-markdown-content">
+          
+          <!-- 结构化卡片展示 -->
+          <div v-if="summaryStructured" class="structured-cards mt-4 space-y-4 text-left">
+            <div v-if="summaryStructured.summary" class="bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
+              <h3 class="text-sm font-bold text-gray-800 mb-2 flex items-center gap-2"><span class="text-purple-500">📝</span> 摘要</h3>
+              <p class="text-sm text-gray-600 leading-relaxed">{{ summaryStructured.summary }}</p>
+            </div>
+            
+            <div v-if="summaryStructured.action_items && summaryStructured.action_items.length" class="bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
+              <h3 class="text-sm font-bold text-gray-800 mb-2 flex items-center gap-2"><span class="text-blue-500">✅</span> 待办事项</h3>
+              <ul class="list-disc pl-5 text-sm text-gray-600 space-y-1">
+                <li v-for="(item, idx) in summaryStructured.action_items" :key="idx">
+                  {{ item.task }} <span v-if="item.owner || item.deadline" class="text-gray-400">（负责人：{{ item.owner || '无' }}，截止：{{ item.deadline || '无' }}）</span>
+                </li>
+              </ul>
+            </div>
+
+            <div v-if="summaryStructured.decisions && summaryStructured.decisions.length" class="bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
+              <h3 class="text-sm font-bold text-gray-800 mb-2 flex items-center gap-2"><span class="text-green-500">🎯</span> 决策</h3>
+              <ul class="list-disc pl-5 text-sm text-gray-600 space-y-1">
+                <li v-for="(item, idx) in summaryStructured.decisions" :key="idx">{{ item }}</li>
+              </ul>
+            </div>
+
+            <div v-if="summaryStructured.risks && summaryStructured.risks.length" class="bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
+              <h3 class="text-sm font-bold text-gray-800 mb-2 flex items-center gap-2"><span class="text-red-500">⚠️</span> 风险</h3>
+              <ul class="list-disc pl-5 text-sm text-gray-600 space-y-1">
+                <li v-for="(item, idx) in summaryStructured.risks" :key="idx">{{ item }}</li>
+              </ul>
+            </div>
+
+            <div v-if="summaryStructured.open_questions && summaryStructured.open_questions.length" class="bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
+              <h3 class="text-sm font-bold text-gray-800 mb-2 flex items-center gap-2"><span class="text-orange-500">❓</span> 待确认问题</h3>
+              <ul class="list-disc pl-5 text-sm text-gray-600 space-y-1">
+                <li v-for="(item, idx) in summaryStructured.open_questions" :key="idx">{{ item }}</li>
+              </ul>
+            </div>
+
+            <div v-if="summaryStructured.insights && summaryStructured.insights.length" class="bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
+              <h3 class="text-sm font-bold text-gray-800 mb-2 flex items-center gap-2"><span class="text-yellow-500">💡</span> 洞察</h3>
+              <ul class="list-disc pl-5 text-sm text-gray-600 space-y-1">
+                <li v-for="(item, idx) in summaryStructured.insights" :key="idx">{{ item }}</li>
+              </ul>
+            </div>
+
+            <div v-if="summaryStructured.timeline && summaryStructured.timeline.length" class="bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
+              <h3 class="text-sm font-bold text-gray-800 mb-2 flex items-center gap-2"><span class="text-teal-500">⏱️</span> 时间线</h3>
+              <ul class="list-none text-sm text-gray-600 space-y-1">
+                <li v-for="(item, idx) in summaryStructured.timeline" :key="idx">
+                  <span class="font-medium text-gray-700 mr-2">{{ item.order }}.</span>{{ item.event }}
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- 降级/原始 Markdown 展示 -->
+          <div v-else-if="summaryMarkdown" class="summary-markdown-content mt-4">
             <pre>{{ summaryMarkdown }}</pre>
           </div>
-          <div class="summary-actions">
+          <div class="summary-actions mt-4">
             <button class="secondary-btn" @click="handleCopySummaryBtnClick">复制纪要</button>
             <button class="secondary-btn" @click="downloadSummary">下载 Markdown</button>
           </div>

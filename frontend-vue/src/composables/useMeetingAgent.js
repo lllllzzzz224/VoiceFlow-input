@@ -2,6 +2,7 @@ import { ref } from 'vue';
 
 export function useMeetingAgent() {
   const summaryMarkdown = ref('');
+  const summaryStructured = ref(null);
   const summaryLoading = ref(false);
   const summaryError = ref('');
   const summaryMeta = ref(null);
@@ -12,6 +13,7 @@ export function useMeetingAgent() {
     summaryLoading.value = true;
     summaryError.value = '';
     summaryMarkdown.value = '';
+    summaryStructured.value = null;
     summaryMeta.value = null;
 
     try {
@@ -50,6 +52,7 @@ export function useMeetingAgent() {
       }
 
       summaryMarkdown.value = data.data.summary_markdown || '';
+      summaryStructured.value = data.data.structured || null;
       summaryMeta.value = {
         provider: data.data.provider,
         model: data.data.model,
@@ -105,6 +108,7 @@ export function useMeetingAgent() {
 
   return {
     summaryMarkdown,
+    summaryStructured,
     summaryLoading,
     summaryError,
     summaryMeta,

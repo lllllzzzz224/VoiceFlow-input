@@ -43,20 +43,153 @@ class MeetingSummaryRequest(BaseModel):
 
 
 def build_local_meeting_summary(transcript: str) -> str:
+    structured = build_local_meeting_summary_structured(transcript)
+    return render_structured_minutes_markdown(structured, include_original=True, transcript=transcript)
+
+
+def _default_structured_summary() -> dict[str, Any]:
+    return {
+        "summary": "未提及",
+        "action_items": [],
+        "decisions": [],
+        "risks": [],
+        "open_questions": [],
+        "insights": [],
+        "timeline": [],
+    }
+
+
+def _safe_text(value: Any, fallback: str = "未提及") -> str:
+    if isinstance(value, str):
+        normalized = value.strip()
+        return normalized if normalized else fallback
+    return fallback
+
+
+def normalize_structured_summary(payload: Any) -> dict[str, Any]:
+    base = _default_structured_summary()
+    if not isinstance(payload, dict):
+        return base
+
+    result = dict(base)
+    result["summary"] = _safe_text(payload.get("summary"))
+
+    action_items: list[dict[str, str]] = []
+    for item in payload.get("action_items", []) if isinstance(payload.get("action_items"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        action_items.append(
+            {
+                "task": _safe_text(item.get("task")),
+                "owner": _safe_text(item.get("owner")),
+                "deadline": _safe_text(item.get("deadline")),
+            }
+        )
+    result["action_items"] = action_items
+
+    for key in ("decisions", "risks", "open_questions", "insights"):
+        values: list[str] = []
+        for item in payload.get(key, []) if isinstance(payload.get(key), list) else []:
+            text = _safe_text(item, "")
+            if text:
+                values.append(text)
+        result[key] = values
+
+    timeline: list[dict[str, Any]] = []
+    for item in payload.get("timeline", []) if isinstance(payload.get("timeline"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        event = _safe_text(item.get("event"), "")
+        if not event:
+            continue
+        order_value = item.get("order")
+        try:
+            order_int = int(order_value)
+        except Exception:
+            order_int = len(timeline) + 1
+        timeline.append({"order": order_int, "event": event})
+    result["timeline"] = timeline
+    return result
+
+
+def render_structured_minutes_markdown(
+    structured: dict[str, Any],
+    include_original: bool,
+    transcript: str,
+) -> str:
+    data = normalize_structured_summary(structured)
+    lines: list[str] = []
+    lines.append("# 会议纪要")
+    lines.append("")
+    lines.append("## 摘要")
+    lines.append(data["summary"])
+    lines.append("")
+    lines.append("## 待办事项")
+    if data["action_items"]:
+        for item in data["action_items"]:
+            lines.append(f"- [ ] {item['task']}（负责人：{item['owner']}，截止：{item['deadline']}）")
+    else:
+        lines.append("- [ ] 未提及（负责人：未提及，截止：未提及）")
+    lines.append("")
+    lines.append("## 决策")
+    if data["decisions"]:
+        for item in data["decisions"]:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- 未提及")
+    lines.append("")
+    lines.append("## 风险")
+    if data["risks"]:
+        for item in data["risks"]:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- 未提及")
+    lines.append("")
+    lines.append("## 待确认问题")
+    if data["open_questions"]:
+        for item in data["open_questions"]:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- 未提及")
+    lines.append("")
+    lines.append("## 洞察")
+    if data["insights"]:
+        for item in data["insights"]:
+            lines.append(f"- {item}")
+    else:
+        lines.append("- 未提及")
+    lines.append("")
+    lines.append("## 时间线")
+    if data["timeline"]:
+        for item in data["timeline"]:
+            lines.append(f"{item['order']}. {item['event']}")
+    else:
+        lines.append("1. 未提及")
+    if include_original:
+        lines.append("")
+        lines.append("## 原始转写")
+        lines.append(transcript if transcript else "未提及")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def build_summary_markdown(structured: dict[str, Any]) -> str:
+    return render_structured_minutes_markdown(structured, include_original=False, transcript="")
+
+
+def build_local_meeting_summary_structured(transcript: str) -> dict[str, Any]:
     trimmed = transcript.strip()
-    clipped = trimmed if len(trimmed) <= 1200 else f"{trimmed[:1200]}\n...(truncated)"
-    return (
-        "# \u4f1a\u8bae\u7eaa\u8981\n\n"
-        "## \u4f1a\u8bae\u6458\u8981\n"
-        "- \u57fa\u4e8e\u5f53\u524d\u8f6c\u5199\u6587\u672c\u751f\u6210\u7684\u672c\u5730\u7eaa\u8981\u8349\u7a3f\u3002\n\n"
-        "## \u5173\u952e\u7ed3\u8bba\n"
-        "- \u672a\u63d0\u53ca\n\n"
-        "## \u5f85\u529e\u4e8b\u9879\n"
-        "- \u672a\u63d0\u53ca\n\n"
-        "## \u98ce\u9669\u70b9\n"
-        "- \u672a\u63d0\u53ca\n\n"
-        "## \u539f\u59cb\u8981\u70b9\n"
-        f"{clipped}\n"
+    clipped = trimmed if len(trimmed) <= 1200 else f"{trimmed[:1200]}...(truncated)"
+    return normalize_structured_summary(
+        {
+            "summary": "基于当前转写文本生成的本地纪要草稿。",
+            "action_items": [{"task": "未提及", "owner": "未提及", "deadline": "未提及"}],
+            "decisions": [],
+            "risks": [],
+            "open_questions": [],
+            "insights": [],
+            "timeline": [{"order": 1, "event": clipped if clipped else "未提及"}],
+        }
     )
 
 
@@ -307,9 +440,13 @@ async def meeting_summary(payload: MeetingSummaryRequest) -> dict[str, Any]:
 
     if provider_name == "local":
         latency_ms = max(int((time.perf_counter() - started) * 1000), 1)
+        structured = build_local_meeting_summary_structured(transcript)
         result = ok_result(
             data={
-                "summary_markdown": build_local_meeting_summary(transcript),
+                "summary_markdown": render_structured_minutes_markdown(
+                    structured, include_original=payload.include_original, transcript=transcript
+                ),
+                "structured": structured,
                 "provider": "local_fallback",
                 "model": "local-template-v1",
                 "mode": payload.mode,
@@ -326,9 +463,13 @@ async def meeting_summary(payload: MeetingSummaryRequest) -> dict[str, Any]:
 
     if not _provider_key_available(provider_name):
         latency_ms = max(int((time.perf_counter() - started) * 1000), 1)
+        structured = build_local_meeting_summary_structured(transcript)
         result = ok_result(
             data={
-                "summary_markdown": build_local_meeting_summary(transcript),
+                "summary_markdown": render_structured_minutes_markdown(
+                    structured, include_original=payload.include_original, transcript=transcript
+                ),
+                "structured": structured,
                 "provider": "local_fallback",
                 "model": "local-template-v1",
                 "mode": payload.mode,
@@ -345,11 +486,23 @@ async def meeting_summary(payload: MeetingSummaryRequest) -> dict[str, Any]:
         return result.model_dump()
 
     try:
-        summary_markdown = await provider.summarize(
-            transcript=transcript,
-            mode=payload.mode,
-            include_original=payload.include_original,
-        )
+        if provider_name == "deepseek":
+            structured_raw = await provider.summarize_structured(
+                transcript=transcript,
+                mode=payload.mode,
+                include_original=payload.include_original,
+            )
+            structured = normalize_structured_summary(structured_raw)
+            summary_markdown = render_structured_minutes_markdown(
+                structured, include_original=payload.include_original, transcript=transcript
+            )
+        else:
+            summary_markdown = await provider.summarize(
+                transcript=transcript,
+                mode=payload.mode,
+                include_original=payload.include_original,
+            )
+            structured = normalize_structured_summary({"summary": summary_markdown})
         latency_ms = max(int((time.perf_counter() - started) * 1000), 1)
         logger.info(
             "meeting_summary provider=%s model=%s success=%s latency_ms=%s transcript_length=%s",
@@ -362,6 +515,7 @@ async def meeting_summary(payload: MeetingSummaryRequest) -> dict[str, Any]:
         result = ok_result(
             data={
                 "summary_markdown": summary_markdown,
+                "structured": structured,
                 "provider": provider_name,
                 "model": provider_model,
                 "mode": payload.mode,
@@ -384,9 +538,13 @@ async def meeting_summary(payload: MeetingSummaryRequest) -> dict[str, Any]:
             latency_ms,
             transcript_length,
         )
+        structured = build_local_meeting_summary_structured(transcript)
         result = ok_result(
             data={
-                "summary_markdown": build_local_meeting_summary(transcript),
+                "summary_markdown": render_structured_minutes_markdown(
+                    structured, include_original=payload.include_original, transcript=transcript
+                ),
+                "structured": structured,
                 "provider": "local_fallback",
                 "model": "local-template-v1",
                 "mode": payload.mode,
@@ -396,7 +554,9 @@ async def meeting_summary(payload: MeetingSummaryRequest) -> dict[str, Any]:
                 "ai_enabled": True,
                 "ai_used": True,
                 "provider_fallback": True,
-                "fallback_reason": "provider_request_failed",
+                "fallback_reason": "invalid_structured_json"
+                if exc.reason == "invalid_structured_json"
+                else "provider_request_failed",
                 "provider_error_code": exc.reason,
             },
         )
@@ -411,9 +571,13 @@ async def meeting_summary(payload: MeetingSummaryRequest) -> dict[str, Any]:
             latency_ms,
             transcript_length,
         )
+        structured = build_local_meeting_summary_structured(transcript)
         result = ok_result(
             data={
-                "summary_markdown": build_local_meeting_summary(transcript),
+                "summary_markdown": render_structured_minutes_markdown(
+                    structured, include_original=payload.include_original, transcript=transcript
+                ),
+                "structured": structured,
                 "provider": "local_fallback",
                 "model": "local-template-v1",
                 "mode": payload.mode,
@@ -1072,3 +1236,4 @@ async def ws_transcribe(websocket: WebSocket) -> None:
 
     except WebSocketDisconnect:
         return
+
