@@ -219,6 +219,38 @@ Query:
 
 Returns `Content-Type: text/markdown; charset=utf-8`.
 
+### `POST /ai/meeting-summary`
+
+Request body is unchanged:
+
+```json
+{
+  "transcript": "string",
+  "mode": "minutes",
+  "include_original": true
+}
+```
+
+Response keeps `summary_markdown` for compatibility and adds `structured`:
+
+```json
+{
+  "summary_markdown": "...",
+  "structured": {
+    "summary": "...",
+    "action_items": [{"task": "...", "owner": "未提及", "deadline": "未提及"}],
+    "decisions": [],
+    "risks": [],
+    "open_questions": [],
+    "insights": [],
+    "timeline": [{"order": 1, "event": "..."}]
+  },
+  "provider": "deepseek",
+  "model": "deepseek-v4-flash",
+  "mode": "minutes"
+}
+```
+
 ## CORS
 
 For frontend `http://localhost:8080` -> backend `http://localhost:8000`, backend CORS is configured for local development origins by default.

@@ -25,7 +25,7 @@ def main() -> None:
     original_provider = settings.meeting_summary_provider
     original_deepseek_key = settings.deepseek_api_key
     original_deepseek_model = settings.deepseek_model
-    original_summarize = deepseek_meeting_summary_provider.summarize
+    original_summarize_structured = deepseek_meeting_summary_provider.summarize_structured
 
     try:
         with TestClient(app) as client:
@@ -55,6 +55,7 @@ def main() -> None:
             assert_standard_result_shape(missing_key_payload)
             assert missing_key_payload["success"] is True
             assert missing_key_payload["data"]["provider"] == "local_fallback"
+            assert isinstance(missing_key_payload["data"]["structured"], dict)
             assert missing_key_payload["meta"]["provider_fallback"] is True
             assert missing_key_payload["meta"]["provider_error_code"] == "CONFIG_ERROR"
 
@@ -72,9 +73,17 @@ def main() -> None:
             assert empty_payload["meta"]["ai_used"] is False
 
             async def fake_success(*_args, **_kwargs):  # type: ignore[no-untyped-def]
-                return "# minutes\n\n## summary\n- ok"
+                return {
+                    "summary": "这是摘要",
+                    "action_items": [{"task": "整理发布", "owner": "未提及", "deadline": "未提及"}],
+                    "decisions": ["继续推进"],
+                    "risks": ["准确度风险"],
+                    "open_questions": ["是否需要额外校验"],
+                    "insights": ["准流式准确度是当前演示风险"],
+                    "timeline": [{"order": 1, "event": "确认方案"}],
+                }
 
-            deepseek_meeting_summary_provider.summarize = fake_success  # type: ignore[assignment]
+            deepseek_meeting_summary_provider.summarize_structured = fake_success  # type: ignore[assignment]
             success_resp = client.post(
                 "/ai/meeting-summary",
                 json={"transcript": "meeting content", "mode": "minutes", "include_original": True},
@@ -88,15 +97,41 @@ def main() -> None:
             assert success_payload["data"]["model"] == settings.deepseek_model
             assert success_payload["data"]["mode"] == "minutes"
             assert isinstance(success_payload["data"]["summary_markdown"], str)
+            assert isinstance(success_payload["data"]["structured"], dict)
+            assert "summary" in success_payload["data"]["structured"]
+            assert "action_items" in success_payload["data"]["structured"]
+            markdown = success_payload["data"]["summary_markdown"]
+            assert "## 待办事项" in markdown
+            assert "## 决策" in markdown
+            assert "## 风险" in markdown
             assert success_payload["meta"]["ai_enabled"] is True
             assert success_payload["meta"]["ai_used"] is True
             assert success_payload["meta"]["provider_fallback"] is False
             assert "latency_ms" in success_payload["meta"]
 
+            async def fake_invalid_json(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+                raise MeetingSummaryProviderError("invalid_structured_json", "provider json parse failed")
+
+            deepseek_meeting_summary_provider.summarize_structured = fake_invalid_json  # type: ignore[assignment]
+            invalid_json_resp = client.post(
+                "/ai/meeting-summary",
+                json={"transcript": "meeting content", "mode": "minutes", "include_original": True},
+            )
+            assert invalid_json_resp.status_code == 200
+            invalid_json_payload = invalid_json_resp.json()
+            assert_standard_result_shape(invalid_json_payload)
+            assert invalid_json_payload["success"] is True
+            assert invalid_json_payload["error"] is None
+            assert invalid_json_payload["data"]["provider"] == "local_fallback"
+            assert isinstance(invalid_json_payload["data"]["structured"], dict)
+            assert invalid_json_payload["meta"]["provider_fallback"] is True
+            assert invalid_json_payload["meta"]["fallback_reason"] == "invalid_structured_json"
+            assert invalid_json_payload["meta"]["provider_error_code"] == "invalid_structured_json"
+
             async def fake_failure(*_args, **_kwargs):  # type: ignore[no-untyped-def]
                 raise MeetingSummaryProviderError("http_error", "Bearer token failure Authorization header")
 
-            deepseek_meeting_summary_provider.summarize = fake_failure  # type: ignore[assignment]
+            deepseek_meeting_summary_provider.summarize_structured = fake_failure  # type: ignore[assignment]
             provider_fail_resp = client.post(
                 "/ai/meeting-summary",
                 json={"transcript": "meeting content", "mode": "minutes", "include_original": True},
@@ -107,6 +142,7 @@ def main() -> None:
             assert provider_fail_payload["success"] is True
             assert provider_fail_payload["error"] is None
             assert provider_fail_payload["data"]["provider"] == "local_fallback"
+            assert isinstance(provider_fail_payload["data"]["structured"], dict)
             assert provider_fail_payload["meta"]["provider_fallback"] is True
             assert provider_fail_payload["meta"]["provider_error_code"] == "http_error"
 
@@ -119,7 +155,7 @@ def main() -> None:
         settings.meeting_summary_provider = original_provider
         settings.deepseek_api_key = original_deepseek_key
         settings.deepseek_model = original_deepseek_model
-        deepseek_meeting_summary_provider.summarize = original_summarize  # type: ignore[assignment]
+        deepseek_meeting_summary_provider.summarize_structured = original_summarize_structured  # type: ignore[assignment]
 
     print("meeting_summary_smoke: PASS")
 

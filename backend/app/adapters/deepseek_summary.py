@@ -4,6 +4,7 @@ import asyncio
 import json
 import urllib.error
 import urllib.request
+from typing import Any
 
 from app.adapters.xiaomi_mimo import MeetingSummaryProviderError
 from app.settings import settings
@@ -11,31 +12,68 @@ from app.settings import settings
 
 def _build_system_prompt() -> str:
     return (
-        "\u4f60\u662f VoiceFlow Input \u7684\u4f1a\u8bae\u7eaa\u8981\u52a9\u624b\u3002"
-        "\u8bf7\u6839\u636e\u7528\u6237\u63d0\u4f9b\u7684\u4f1a\u8bae\u8f6c\u5199\u6587\u672c\u751f\u6210\u7b80\u6d01\u3001\u7ed3\u6784\u5316\u7684 Markdown \u4f1a\u8bae\u7eaa\u8981\u3002"
-        "\u4e0d\u8981\u7f16\u9020\u672a\u51fa\u73b0\u7684\u4fe1\u606f\uff1b"
-        "\u4e0d\u8981\u6539\u5199\u6570\u5b57\u3001\u65e5\u671f\u3001\u4e13\u6709\u540d\u8bcd\u3001\u4ee3\u7801\u547d\u4ee4\u3001URL\uff1b"
-        "\u5982\u679c\u4fe1\u606f\u4e0d\u8db3\uff0c\u8bf7\u5199\u201c\u672a\u63d0\u53ca\u201d\u3002"
+        "你是 VoiceFlow Input 的会议纪要结构化助手。"
+        "请只根据用户提供的会议转写文本提取信息，不要编造。"
+        "不要改写数字、日期、专有名词、代码命令、URL。"
+        "输出必须是合法 JSON，不要使用 Markdown 代码块。"
+        "字段必须包含：summary, action_items, decisions, risks, open_questions, insights, timeline。"
+        "action_items 每项包含 task, owner, deadline。"
+        "timeline 每项包含 order, event。"
+        "如果信息不足，使用空数组或“未提及”。"
     )
 
 
 def _build_user_prompt(transcript: str) -> str:
     return (
-        "\u8bf7\u5c06\u4ee5\u4e0b\u4f1a\u8bae\u8f6c\u5199\u6574\u7406\u4e3a Markdown \u4f1a\u8bae\u7eaa\u8981\uff0c"
-        "\u5305\u542b\uff1a\u4f1a\u8bae\u6458\u8981\u3001\u5173\u952e\u7ed3\u8bba\u3001\u5f85\u529e\u4e8b\u9879\u3001\u98ce\u9669\u70b9\u3001\u539f\u59cb\u8981\u70b9\u3002\n\n"
+        "请把以下会议转写整理为结构化 JSON。字段必须包含：\n"
+        "summary: string\n"
+        "action_items: array，每项包含 task, owner, deadline\n"
+        "decisions: array of string\n"
+        "risks: array of string\n"
+        "open_questions: array of string\n"
+        "insights: array of string\n"
+        "timeline: array，每项包含 order, event\n\n"
+        "如果没有对应信息，数组返回 []，owner/deadline 写“未提及”。\n\n"
         "<transcript>\n"
         f"{transcript}\n"
         "</transcript>"
     )
 
 
+def _extract_message_content(response_json: dict[str, Any]) -> str:
+    choices = response_json.get("choices", [])
+    if not isinstance(choices, list) or not choices:
+        raise MeetingSummaryProviderError("invalid_response", "provider response has no choices")
+    message = choices[0].get("message", {})
+    if not isinstance(message, dict):
+        raise MeetingSummaryProviderError("invalid_response", "provider response message invalid")
+    content = message.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise MeetingSummaryProviderError("invalid_response", "provider response content is empty")
+    return content.strip()
+
+
+def _parse_structured_json(content: str) -> dict[str, Any]:
+    normalized = content.strip()
+    if normalized.startswith("```"):
+        normalized = normalized.strip("`")
+        normalized = normalized.replace("json", "", 1).strip()
+    try:
+        parsed = json.loads(normalized)
+    except Exception as exc:
+        raise MeetingSummaryProviderError("invalid_structured_json", f"provider json parse failed: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise MeetingSummaryProviderError("invalid_structured_json", "provider response json is not an object")
+    return parsed
+
+
 class DeepSeekMeetingSummaryProvider:
     provider = "deepseek"
 
-    async def summarize(self, transcript: str, mode: str, include_original: bool) -> str:
-        return await asyncio.to_thread(self._summarize_sync, transcript, mode, include_original)
+    async def summarize_structured(self, transcript: str, mode: str, include_original: bool) -> dict[str, Any]:
+        return await asyncio.to_thread(self._summarize_structured_sync, transcript, mode, include_original)
 
-    def _summarize_sync(self, transcript: str, mode: str, include_original: bool) -> str:
+    def _summarize_structured_sync(self, transcript: str, mode: str, include_original: bool) -> dict[str, Any]:
         _ = mode
         _ = include_original
         url = settings.deepseek_api_base_url.rstrip("/") + "/chat/completions"
@@ -72,14 +110,8 @@ class DeepSeekMeetingSummaryProvider:
 
         try:
             response_json = json.loads(response_bytes.decode("utf-8"))
-            choices = response_json.get("choices", [])
-            if not choices:
-                raise MeetingSummaryProviderError("invalid_response", "provider response has no choices")
-            message = choices[0].get("message", {})
-            content = message.get("content")
-            if not isinstance(content, str) or not content.strip():
-                raise MeetingSummaryProviderError("invalid_response", "provider response content is empty")
-            return content.strip()
+            content = _extract_message_content(response_json)
+            return _parse_structured_json(content)
         except MeetingSummaryProviderError:
             raise
         except Exception as exc:
